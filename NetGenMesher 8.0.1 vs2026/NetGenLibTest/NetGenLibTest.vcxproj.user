@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LocalDebuggerCommandArguments>BREP_SCALE_GEOMETRY "C:\\Temp\\geometry.brep" "C:\\Temp\\geometry.brep" 0 0 0 1 2 1</LocalDebuggerCommandArguments>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LocalDebuggerCommandArguments>STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Temp\revolve_body.STEP" "C:\Temp\revolve_body.brep" 2</LocalDebuggerCommandArguments>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+    <LocalDebuggerCommandArgumentsHistory>BREP_MESH "C:\Temp\geometry.brep" "C:\Temp\geometry.vol" "C:\Temp\meshParameters" "C:\Temp\meshRefinement"|STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Pc\Programiranje\NetgenMesher\NetgenMesher\Test\revolve_body.STEP" "C:\Pc\Programiranje\NetgenMesher\NetgenMesher\Test"|STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Temp\revolve_body.STEP" "C:\Temp"|STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Temp\revolve_body.STEP" "C:\Temp\revolve_body.brep" 2|</LocalDebuggerCommandArgumentsHistory>
+    <LocalDebuggerWorkingDirectory>C:\Temp</LocalDebuggerWorkingDirectory>
+  </PropertyGroup>
+</Project>
