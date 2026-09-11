@@ -279,8 +279,6 @@ namespace netgen
       
 
 #ifdef CHOL
-        int dots = (n > 200);
-
         // Cholesky
       
         double x;
@@ -299,9 +297,6 @@ namespace netgen
       
         for (i = 1; i <= n; i++)
           {
-            if (dots && i % 10 == 0)
-              (*mycout) << "." << flush;
-
             for (j = i; j <= n; j++)
               {
                 x = m2.Get(i, j);
@@ -355,9 +350,6 @@ namespace netgen
 
         for (i = 1; i <= n; i++)
           {
-            if (dots && i % 10 == 0)
-              (*mycout) << "+" << flush;
-
             for (j = i; j <= n; j++)
               {
                 x = 0;
@@ -390,9 +382,6 @@ namespace netgen
 
         for (i = 1; i <= n; i++)
           {
-            if (dots && i % 10 == 0)
-              (*mycout) << "-" << flush;
-
             for (j = 1; j <= i; j++)
               {
                 x = 0;
@@ -415,7 +404,6 @@ namespace netgen
           for (j = 1; j < i; j++)
             m2.Elem(j, i) = m2.Get(i, j);
       
-        if (dots) (*mycout) << endl;
 #endif
 
 

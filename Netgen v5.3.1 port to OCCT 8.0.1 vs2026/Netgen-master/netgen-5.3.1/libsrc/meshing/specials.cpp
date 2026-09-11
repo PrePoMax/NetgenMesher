@@ -47,9 +47,6 @@ void CutOffAndCombine (Mesh & mesh, const Mesh & othermesh)
       const Element & el = mesh.VolumeElement(i);
       el.GetBox(mesh.Points(), box);
 
-      if (i % 10000 == 0)
-	cout << "+" << flush;
-
       if (box.Intersect(otherbox))
 	{
 	  for (j = 1; j <= nse && !remove; j++)
@@ -96,10 +93,8 @@ void CutOffAndCombine (Mesh & mesh, const Mesh & othermesh)
 		}
 	    }
 	}
-      cout << "." << flush;
     }
   while (changed);
-  cout << endl;
 
   for (i = 1; i <= mesh.GetNE(); i++)
     {

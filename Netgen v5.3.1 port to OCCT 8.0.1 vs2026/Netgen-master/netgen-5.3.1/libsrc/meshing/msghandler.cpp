@@ -6,7 +6,7 @@ namespace netgen
 int printmessage_importance = 5;
 int printwarnings = 1;
 int printerrors = 1;
-int printdots = 1;
+int printdots = 0;   // progress dots are permanently switched off
 int printfnstart = 0;
 
 static thread_local bool thread_messages_quiet = false;
@@ -24,16 +24,12 @@ bool ThreadMessagesQuiet()
 // extern void Ng_PrintDest(const MyStr& s);
 extern void Ng_PrintDest(const char * s);
 
-//the dots for progression of program
-void PrintDot(char ch)
+//the dots for progression of program.
+//Disabled: the long runs of '.', '+', '*' and 'o' characters (and the carriage
+//return that used to terminate such a run) flooded the message window without
+//carrying any information, so every progress character is dropped here.
+void PrintDot(char)
 {
-  if (printdots && !thread_messages_quiet)
-    {
-      char st[2];
-      st[0] = ch;
-      st[1] = 0;
-      Ng_PrintDest(st);
-    }
 }
 
 void PrintMessage(int importance, 
@@ -64,14 +60,12 @@ void PrintMessage(int importance,
     }
 }
 
-void PrintMessageCR(int importance, 
-		    const MyStr& s1, const MyStr& s2, const MyStr& s3, const MyStr& s4, 
-		    const MyStr& s5, const MyStr& s6, const MyStr& s7, const MyStr& s8)
+//status line that used to overwrite itself with a carriage return.
+//Disabled: a log window that stamps every write with a time turns each of
+//these updates into a line of its own, which buries the real messages.
+void PrintMessageCR(int, const MyStr&, const MyStr&, const MyStr&, const MyStr&,
+		    const MyStr&, const MyStr&, const MyStr&, const MyStr&)
 {
-  if (importance <= printmessage_importance && !thread_messages_quiet)
-    {
-      Ng_PrintDest(MyStr(" ")+s1+s2+s3+s4+s5+s6+s7+s8+MyStr("\r"));
-    }
 }
 
 void PrintFnStart(const MyStr& s1, const MyStr& s2, const MyStr& s3, const MyStr& s4, 
