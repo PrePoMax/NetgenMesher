@@ -97,7 +97,7 @@ char** ReadDataFile(int &argc, char* argv[]);
 
 // MAIN
 //int _tmain(int argc, _TCHAR* argv[])
-int main(int argc, char* argv[])
+static int RunCommand(int argc, char* argv[])
 {
 	// occ_visualization "C:\Temp\Bearing_bracket.STEP" "C:\Temp\Bearing_bracket.vis" 0.01
 	// occ_visualization "C:\Temp\Bearing_bracket.STEP" "D:\Pc\Programiranje\NetGenLibOC v2\Working folder\part1.stl" "D:\Pc\Programiranje\NetGenLibOC v2\Working folder\parametres" "D:\Pc\Programiranje\NetGenLibOC v2\Working folder\part1.vol"
@@ -152,7 +152,30 @@ int main(int argc, char* argv[])
 	return 0;
 }
 
-// Methods																															
+
+// A meshing routine that fails reports it by throwing.  Without a handler the
+// runtime terminates the process, which looks like a crash and hides the
+// reason, so every command runs under this backstop.
+int main(int argc, char* argv[])
+{
+	try
+	{
+		return RunCommand(argc, argv);
+	}
+	catch (const std::exception & exception)
+	{
+		cerr << "Error: " << exception.what() << endl;
+		return 1;
+	}
+	catch (...)
+	{
+		cerr << "Error: the operation failed and could not be completed." << endl;
+		return 1;
+	}
+}
+
+
+// Methods
 void ConvertToUpper(char* data)
 {
 	for (int i = 0; i < strlen(data); i++)

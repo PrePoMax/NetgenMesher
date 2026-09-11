@@ -45,12 +45,15 @@ namespace netgen
 
 		std::vector<char> inconsistent(ndomains, 0);
 		std::vector<char> openquads(ndomains, 0);
+		std::vector<int> boundary_elements(ndomains, 0);
 
 		ParallelForItems(ndomains, ParallelMeshingThreads(mp, ndomains),
 			[&] (int index)
 			{
 				Array<Element2d> openelems;
 				mesh3d.ComputeOpenElements(index + 1, openelems);
+
+				boundary_elements[index] = openelems.Size();
 
 				for (int i = 1; i <= openelems.Size(); i++)
 					if (openelems.Get(i).GetNP() == 4)
@@ -65,7 +68,10 @@ namespace netgen
 
 		int nonconsist = 0;
 		if (info)
+		{
 			info->has_open_quads = false;
+			info->boundary_elements.SetSize(ndomains);
+		}
 
 		for (int index = 0; index < ndomains; index++)
 		{
@@ -74,8 +80,12 @@ namespace netgen
 				PrintError("Surface mesh of subdomain ", index + 1, " not consistent");
 				nonconsist = 1;
 			}
-			if (openquads[index] && info)
-				info->has_open_quads = true;
+			if (info)
+			{
+				info->boundary_elements[index] = boundary_elements[index];
+				if (openquads[index])
+					info->has_open_quads = true;
+			}
 		}
 
 		if (nonconsist)

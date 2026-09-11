@@ -176,6 +176,30 @@ now use a `Point3dTree`. The tie-breaking rule of each scan is reproduced
 exactly, the last match for the vertex lookup and the first for the edge points,
 so the result is unchanged.
 
+**Largest subdomain first.** Subdomains were handed out in index order. Work is
+taken dynamically, so a large solid that starts late finishes alone while the
+other workers idle. `MeshVolumePrepare` already counts the boundary elements of
+every subdomain, so that count is carried in `VolumePrepareInfo` and the
+subdomain mesher sorts its dispatch order by it, descending, stable so equal
+costs keep subdomain order. Only the order of the work changes; results are
+still committed in subdomain order, and the mesh is byte-identical.
+
+The boundary element count predicts the cost well: its correlation with the
+number of tetrahedra a subdomain receives is 0.996 on the reference model, where
+one solid holds 36 per cent of all tetrahedra. A schedule simulation over the
+real subdomain sizes predicted a 7.4 per cent shorter volume phase at four
+workers and 2.8 per cent at eight, and reached the theoretical optimum in both
+cases. Measured, with everything else held constant:
+
+| workers | index order | largest first |
+|---|---|---|
+| 4 | 11.70, 11.75 | 10.82, 10.77 |
+| 8 | 10.95, 11.51 | 10.75, 10.66 |
+
+That is 7.5 per cent at four workers against 7.4 predicted. The gain is bounded
+by the largest solid, so it matters most on models with several large solids and
+cannot exceed the critical path.
+
 Phase times in seconds on the 76-solid compound:
 
 | phase | 1 worker before | 1 worker after | 8 workers before | 8 workers after |
@@ -226,6 +250,40 @@ Both paths close the phase with
 
 and the parallel path prints one commit line per subdomain instead of two.
 
+## A meshing failure terminated the process
+
+Three records for `NetGenMesher.exe` appeared in the Windows application log
+within two minutes of each other, all with exception code `0xc0000409` in
+`ucrtbase.dll` at the same fault offset. That code is the runtime's fail-fast
+path and the faulting module is the C runtime rather than the mesher, which is
+the signature of `abort` rather than a bad memory access. A test run also died
+during volume meshing leaving no output file and no message.
+
+The cause is not memory corruption. Netgen reports a meshing failure by
+throwing `NgException`. `Ng_OCC_GenerateSurfaceMesh` caught it, but
+`Ng_GenerateVolumeMesh`, `Ng_OCC_SetLocalMeshSize` and
+`Ng_OCC_GenerateEdgeMesh` did not, and neither did the executable, so an
+exception left `main` and the runtime terminated the process. Nothing was
+printed because the reason travels in the exception and standard output was
+still buffered.
+
+- Every nglib entry point that meshes now catches, names the stage and returns
+  `NG_ERROR` after printing the message, so the reason reaches the caller.
+- `Ng_GenerateVolumeMesh` also honours the `MESHING3_RESULT` it used to discard,
+  which previously let a failed volume mesh report success.
+- `Ng_OCC_GenerateSurfaceMesh` used to catch silently; it now prints the reason
+  as well.
+- The executable runs every command under a backstop handler that reports the
+  failure and exits with code 1.
+
+Verified with a library that throws deep inside volume meshing: the process
+prints the stage and the reason, exits 1, and writes no crash record. The
+meshes of the reference compound at one and eight workers and of four smaller
+geometries are unchanged.
+
+This does not make a model that cannot be meshed succeed. It turns a silent
+termination into a reported failure, so the next occurrence names its cause.
+
 ## Validation completed
 
 - Debug and Release OCC library builds pass.
@@ -255,19 +313,16 @@ targets, in the order they are worth doing:
    deterministic colouring. If generation dominates, the interior has to be
    partitioned with a frozen conforming interface, which is a separate
    architectural milestone.
-2. **Largest subdomain first.** Subdomains are dispatched in index order, so a
-   large solid that starts late leaves workers idle. Ordering by boundary
-   element count is a few lines and matters on models with several large solids.
-3. **Boundary validation and quality analysis.** The remaining overlap,
+2. **Boundary validation and quality analysis.** The remaining overlap,
    legality, element quality and statistics passes can use read-only per-element
    reductions. `CheckOverlappingBoundary` is still serial inside the volume
    preparation.
-4. **Geometry preparation.** Bounding boxes, face properties, curvature samples
+3. **Geometry preparation.** Bounding boxes, face properties, curvature samples
    and some OCC triangulation preparation can be parallelized once any lazy OCC
    caches are initialized safely.
-5. **Import, export and conversion.** The result file is written and read back
+4. **Import, export and conversion.** The result file is written and read back
    through unbuffered streams, which is seconds on large models.
-6. **Memory of the subdomain workers.** The per-worker copy of the local size
+5. **Memory of the subdomain workers.** The per-worker copy of the local size
    octree could be replaced by a shared read-only tree plus per-worker flag
    arrays and a per-worker overlay for block-fill restrictions, if very large
    models with many workers run short of memory.

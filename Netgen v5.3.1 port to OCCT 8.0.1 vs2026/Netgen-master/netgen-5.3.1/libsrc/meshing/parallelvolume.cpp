@@ -29,6 +29,7 @@
 
 #include "parallelfor.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <string>
 #include <vector>
@@ -232,9 +233,29 @@ namespace netgen
     const Mesh & source = mesh3d;
     const MeshingParameters & parameters = mp;
 
-    ParallelForItems(ndomains, threads,
-      [&] (int index)
+    /*
+      Mesh the largest subdomains first.  Work is handed out dynamically, so a
+      large solid that starts late leaves the other workers idle while it
+      finishes alone.  The boundary element count counted by MeshVolumePrepare
+      predicts the cost of a subdomain closely, and sorting by it reaches the
+      shortest possible schedule on the reference model.  Only the order of the
+      work changes; results are still committed in subdomain order.
+    */
+    std::vector<int> order(ndomains);
+    for (int i = 0; i < ndomains; i++)
+      order[i] = i;
+
+    if (info.boundary_elements.Size() == ndomains)
       {
+        const Array<int> & cost = info.boundary_elements;
+        std::stable_sort(order.begin(), order.end(),
+          [&cost] (int a, int b) { return cost[a] > cost[b]; });
+      }
+
+    ParallelForItems(ndomains, threads,
+      [&] (int item)
+      {
+        const int index = order[item];
         MeshDomainInScratch(source, parameters, index + 1, ndomains, results[index]);
         multithread.percent = 100.0 * (++completed) / ndomains;
       });

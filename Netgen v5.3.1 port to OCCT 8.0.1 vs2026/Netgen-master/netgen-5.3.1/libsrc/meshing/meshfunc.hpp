@@ -23,6 +23,10 @@ struct VolumePrepareInfo
 {
   /// a subdomain has open quadrilaterals, which only the serial path can mesh
   bool has_open_quads;
+  /// boundary elements of subdomain k at position k-1, empty if not collected.
+  /// Predicts the meshing cost of a subdomain closely and is used to mesh the
+  /// largest subdomains first.
+  Array<int> boundary_elements;
 
   VolumePrepareInfo () : has_open_quads(false) { ; }
 };

@@ -385,9 +385,39 @@ namespace nglib
 
 
 
+	/*
+	  Meshing routines report a failure by throwing.  An exception that leaves
+	  nglib has no handler above it and terminates the process, so every entry
+	  point that meshes catches it here, names the stage and returns NG_ERROR.
+	  Call from inside a catch block.
+	*/
+	static Ng_Result ReportMeshingException(const char * stage)
+	{
+		try
+		{
+			throw;
+		}
+		catch (NgException & exception)
+		{
+			PrintError(stage, " failed: ", exception.What().c_str());
+		}
+		catch (std::exception & exception)
+		{
+			PrintError(stage, " failed: ", exception.what());
+		}
+		catch (...)
+		{
+			PrintError(stage, " failed with an unknown error");
+		}
+		return NG_ERROR;
+	}
+
+
 	// Generates volume mesh from an existing surface mesh
 	DLL_HEADER Ng_Result Ng_GenerateVolumeMesh(Ng_Mesh * mesh, Ng_Meshing_Parameters * mp)
 	{
+	  try
+	  {
 		Mesh * m = (Mesh*)mesh;
 
 		// Philippose - 30/08/2009
@@ -401,11 +431,17 @@ namespace nglib
 		// Serial: MeshVolume + RemoveIllegalElements + OptimizeVolume.
 		// With mparam.parallel_meshing_threads != 1 the independent subdomains
 		// are meshed and optimized in parallel and committed in domain order.
-		MeshVolumeAndOptimize(mparam, *m);
+		if (MeshVolumeAndOptimize(mparam, *m) != MESHING3_OK)
+			return NG_ERROR;
 
 		//GenerateBoundaryLayer2(*m, mparam);
 
 		return NG_OK;
+	  }
+	  catch (...)
+	  {
+		return ReportMeshingException("Volume meshing");
+	  }
 	}
 
 
@@ -1641,6 +1677,8 @@ namespace nglib
 	// Locally limit the size of the mesh to be generated at various points based on the topology of the geometry
 	DLL_HEADER Ng_Result Ng_OCC_SetLocalMeshSize(Ng_OCC_Geometry * geom, double deflection, Ng_Mesh * mesh, Ng_Meshing_Parameters * mp)
 	{
+	  try
+	  {
 		// Variables
 		OCCGeometry * occgeom = (OCCGeometry*)geom;
 		Mesh * me = (Mesh*)mesh;
@@ -1659,11 +1697,18 @@ namespace nglib
 		OCCSetLocalMeshSize(*occgeom, *me);
 		//
 		return(NG_OK);
+	  }
+	  catch (...)
+	  {
+		return ReportMeshingException("Setting the local mesh size");
+	  }
 	}
 
 	// Mesh the edges and add Face descriptors to prepare for surface meshing
 	DLL_HEADER Ng_Result Ng_OCC_GenerateEdgeMesh(Ng_OCC_Geometry * geom, Ng_Mesh * mesh, Ng_Meshing_Parameters * mp)
 	{
+	  try
+	  {
 		OCCGeometry * occgeom = (OCCGeometry*)geom;
 		Mesh * me = (Mesh*)mesh;
 
@@ -1679,6 +1724,11 @@ namespace nglib
 		{
 			return NG_ERROR;
 		}
+	  }
+	  catch (...)
+	  {
+		return ReportMeshingException("Edge meshing");
+	  }
 	}
 
 	// Mesh the edges and add Face descriptors to prepare for surface meshing
@@ -1725,7 +1775,7 @@ namespace nglib
 		}
 		catch (...)
 		{
-			return NG_ERROR;
+			return ReportMeshingException("Surface meshing");
 		}
 	}
 	// Extract the face map from the OCC geometry
