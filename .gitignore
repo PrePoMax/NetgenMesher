@@ -21,6 +21,7 @@ NetgenMesher/Test/
 
 # Visual Studio local state
 .vs/
+*.user
 *.aps
 *.suo
 *.sdf
