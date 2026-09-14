@@ -42,8 +42,12 @@
 #include <list>
 #include <BOPAlgo_Builder.hxx>
 #include <BRep_Builder.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRep_TEdge.hxx>
+#include <BRepTools.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <ShapeUpgrade_ShapeDivideClosed.hxx>
 #include <GProp.hxx>
 #include <BRepCheck_Analyzer.hxx>
@@ -429,7 +433,7 @@ namespace nglib
 		m->CalcLocalH(mparam.grading);
 
 		// Serial: MeshVolume + RemoveIllegalElements + OptimizeVolume.
-		// With mparam.parallel_meshing_threads != 1 the independent subdomains
+		// With mparam.parallel_meshing_threads > 1 the independent subdomains
 		// are meshed and optimized in parallel and committed in domain order.
 		if (MeshVolumeAndOptimize(mparam, *m) != MESHING3_OK)
 			return NG_ERROR;
@@ -895,6 +899,443 @@ namespace nglib
 			default: return "Unknown";
 		}
 	}
+	inline const char* OrientationToString(TopAbs_Orientation orientation)
+	{
+		switch (orientation)
+		{
+			case TopAbs_FORWARD: return "Forward";
+			case TopAbs_REVERSED: return "Reversed";
+			case TopAbs_INTERNAL: return "Internal";
+			case TopAbs_EXTERNAL: return "External";
+			default: return "Unknown";
+		}
+	}
+	class GeometryMetadataWriter
+	{
+	private:
+		OCCGeometry* geometry;
+		ofstream& outfile;
+		TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
+		TopTools_IndexedDataMapOfShapeListOfShape faceSolidMap;
+		TopTools_IndexedDataMapOfShapeListOfShape vertexEdgeMap;
+		string entityLabel;
+
+		void BeginEntity(const char* entityType, int id)
+		{
+			if (strcmp(entityType, "solid") == 0) entityLabel = "Solid";
+			else if (strcmp(entityType, "shell") == 0) entityLabel = "Shell";
+			else if (strcmp(entityType, "face") == 0) entityLabel = "Face";
+			else if (strcmp(entityType, "edge") == 0) entityLabel = "Edge";
+			else if (strcmp(entityType, "vertex") == 0) entityLabel = "Vertex";
+			else entityLabel = entityType;
+			outfile << entityLabel << " number: " << id << endl;
+		}
+		void EndEntity()
+		{
+			outfile << endl;
+			entityLabel.clear();
+		}
+		void PropertyName(const char* name)
+		{
+			outfile << entityLabel << " " << name << ":";
+		}
+		void Property(const char* name, double value)
+		{
+			PropertyName(name);
+			outfile << " " << value << endl;
+		}
+		void Property(const char* name, int value)
+		{
+			PropertyName(name);
+			outfile << " " << value << endl;
+		}
+		void Property(const char* name, const char* value)
+		{
+			PropertyName(name);
+			outfile << " " << value << endl;
+		}
+		void Property(const char* name, const gp_Pnt& point)
+		{
+			PropertyName(name);
+			outfile << " " << point.X() << " " << point.Y() << " " << point.Z() << endl;
+		}
+		void Property(const char* name, const gp_Dir& direction)
+		{
+			PropertyName(name);
+			outfile << " " << direction.X() << " " << direction.Y() << " "
+				    << direction.Z() << endl;
+		}
+		void AxisProperty(const gp_Ax1& axis)
+		{
+			const gp_Pnt& location = axis.Location();
+			const gp_Dir& direction = axis.Direction();
+			PropertyName("axis");
+			outfile << " " << location.X() << " " << location.Y() << " " << location.Z() << " "
+				    << direction.X() << " " << direction.Y() << " " << direction.Z() << endl;
+		}
+		void PositionProperties(const gp_Ax2& position)
+		{
+			AxisProperty(position.Axis());
+			Property("x_direction", position.XDirection());
+			Property("y_direction", position.YDirection());
+		}
+		void PositionProperties(const gp_Ax3& position)
+		{
+			AxisProperty(position.Axis());
+			Property("x_direction", position.XDirection());
+			Property("y_direction", position.YDirection());
+		}
+		void BoundingBoxProperty(const TopoDS_Shape& shape)
+		{
+			Bnd_Box box;
+			BRepBndLib::Add(shape, box, Standard_False);
+			if (box.IsVoid()) return;
+			//
+			double xMin;
+			double yMin;
+			double zMin;
+			double xMax;
+			double yMax;
+			double zMax;
+			box.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+			PropertyName("bounding_box");
+			outfile << " " << xMin << " " << xMax << " " << yMin << " " << yMax << " "
+				    << zMin << " " << zMax << endl;
+		}
+		void InertiaProperty(const GProp_GProps& properties)
+		{
+			gp_Mat inertia = properties.MatrixOfInertia();
+			PropertyName("inertia_at_center_of_mass");
+			outfile << " "
+				    << inertia(1, 1) << " " << inertia(1, 2) << " " << inertia(1, 3) << " "
+				    << inertia(2, 1) << " " << inertia(2, 2) << " " << inertia(2, 3) << " "
+				    << inertia(3, 1) << " " << inertia(3, 2) << " " << inertia(3, 3) << endl;
+		}
+		void ShapeIdsProperty(const char* name, const TopoDS_Shape& shape, TopAbs_ShapeEnum shapeType,
+		                      const TopTools_IndexedMapOfShape& globalMap)
+		{
+			TopTools_IndexedMapOfShape localMap;
+			TopExp::MapShapes(shape, shapeType, localMap);
+			PropertyName(name);
+			for (int i = 1; i <= localMap.Extent(); i++)
+			{
+				int id = globalMap.FindIndex(localMap(i));
+				if (id > 0) outfile << " " << id;
+			}
+			outfile << endl;
+		}
+		bool GetSingleParentSolid(const TopoDS_Face& face, TopoDS_Solid& solid)
+		{
+			if (!faceSolidMap.Contains(face)) return false;
+			TopTools_IndexedMapOfShape parentSolids;
+			const TopTools_ListOfShape& solids = faceSolidMap.FindFromKey(face);
+			for (TopTools_ListIteratorOfListOfShape it(solids); it.More(); it.Next()) parentSolids.Add(it.Value());
+			if (parentSolids.Extent() != 1) return false;
+			solid = TopoDS::Solid(parentSolids(1));
+			return true;
+		}
+		const char* CylinderConvexity(const TopoDS_Face& face, const BRepAdaptor_Surface& surface,
+		                                const gp_Cylinder& cylinder)
+		{
+			TopoDS_Solid solid;
+			if (!GetSingleParentSolid(face, solid)) return nullptr;
+			// Find a point inside the trimmed face, away from its boundary. Testing the containing
+			// solid on both radial sides states where the material really is and does not assume
+			// that Forward/Reversed alone has the same meaning for every transformed surface.
+			double uMin;
+			double uMax;
+			double vMin;
+			double vMax;
+			BRepTools::UVBounds(face, uMin, uMax, vMin, vMax);
+			if (Precision::IsInfinite(uMin) || Precision::IsInfinite(uMax) ||
+				Precision::IsInfinite(vMin) || Precision::IsInfinite(vMax)) return nullptr;
+			const double fractions[] = { 0.5, 0.25, 0.75, 0.125, 0.875 };
+			gp_Pnt point;
+			bool pointFound = false;
+			for (double uFraction : fractions)
+			{
+				for (double vFraction : fractions)
+				{
+					double u = uMin + uFraction * (uMax - uMin);
+					double v = vMin + vFraction * (vMax - vMin);
+					BRepClass_FaceClassifier classifier(face, gp_Pnt2d(u, v), Precision::Confusion());
+					if (classifier.State() == TopAbs_IN)
+					{
+						point = surface.Value(u, v);
+						pointFound = true;
+						break;
+					}
+				}
+				if (pointFound) break;
+			}
+			if (!pointFound) return nullptr;
+			// The radial direction points away from the cylinder axis.
+			gp_Vec axis(cylinder.Axis().Direction());
+			gp_Vec radial(cylinder.Axis().Location(), point);
+			radial -= axis.Multiplied(radial.Dot(axis));
+			if (radial.SquareMagnitude() <= Precision::SquareConfusion()) return nullptr;
+			radial.Normalize();
+			double offset = std::max(100.0 * Precision::Confusion(), cylinder.Radius() * 1e-6);
+			BRepClass3d_SolidClassifier classifier(solid);
+			classifier.Perform(point.Translated(radial.Multiplied(-offset)), Precision::Confusion());
+			TopAbs_State towardAxis = classifier.State();
+			classifier.Perform(point.Translated(radial.Multiplied(offset)), Precision::Confusion());
+			TopAbs_State awayFromAxis = classifier.State();
+			if (towardAxis == TopAbs_IN && awayFromAxis == TopAbs_OUT) return "Convex";
+			if (towardAxis == TopAbs_OUT && awayFromAxis == TopAbs_IN) return "Concave";
+			return nullptr;
+		}
+		void WriteSolid(int id, const TopoDS_Shape& solid)
+		{
+			BeginEntity("solid", id);
+			Property("orientation", OrientationToString(solid.Orientation()));
+			BoundingBoxProperty(solid);
+			//
+			GProp_GProps volumeProperties;
+			BRepGProp::VolumeProperties(solid, volumeProperties);
+			Property("volume", volumeProperties.Mass());
+			Property("center_of_mass", volumeProperties.CentreOfMass());
+			InertiaProperty(volumeProperties);
+			//
+			GProp_GProps surfaceProperties;
+			BRepGProp::SurfaceProperties(solid, surfaceProperties);
+			Property("surface_area", surfaceProperties.Mass());
+			ShapeIdsProperty("shell_ids", solid, TopAbs_SHELL, geometry->shmap);
+			ShapeIdsProperty("face_ids", solid, TopAbs_FACE, geometry->fmap);
+			EndEntity();
+		}
+		void WriteShell(int id, const TopoDS_Shape& shell)
+		{
+			BeginEntity("shell", id);
+			Property("orientation", OrientationToString(shell.Orientation()));
+			Property("closed", shell.Closed() ? 1 : 0);
+			BoundingBoxProperty(shell);
+			//
+			GProp_GProps properties;
+			BRepGProp::SurfaceProperties(shell, properties);
+			Property("area", properties.Mass());
+			Property("centroid", properties.CentreOfMass());
+			ShapeIdsProperty("face_ids", shell, TopAbs_FACE, geometry->fmap);
+			EndEntity();
+		}
+		void WriteSurfaceProperties(const TopoDS_Face& face, const BRepAdaptor_Surface& surface,
+		                            GeomAbs_SurfaceType surfaceType)
+		{
+			switch (surfaceType)
+			{
+				case GeomAbs_Plane:
+					PositionProperties(surface.Plane().Position());
+					break;
+				case GeomAbs_Cylinder:
+				{
+					gp_Cylinder cylinder = surface.Cylinder();
+					PositionProperties(cylinder.Position());
+					Property("radius", cylinder.Radius());
+					const char* convexity = CylinderConvexity(face, surface, cylinder);
+					if (convexity != nullptr) Property("convexity", convexity);
+					break;
+				}
+				case GeomAbs_Cone:
+				{
+					gp_Cone cone = surface.Cone();
+					PositionProperties(cone.Position());
+					Property("apex", cone.Apex());
+					Property("reference_radius", cone.RefRadius());
+					Property("semi_angle_rad", cone.SemiAngle());
+					break;
+				}
+				case GeomAbs_Sphere:
+				{
+					gp_Sphere sphere = surface.Sphere();
+					PositionProperties(sphere.Position());
+					Property("center", sphere.Location());
+					Property("radius", sphere.Radius());
+					break;
+				}
+				case GeomAbs_Torus:
+				{
+					gp_Torus torus = surface.Torus();
+					PositionProperties(torus.Position());
+					Property("center", torus.Location());
+					Property("major_radius", torus.MajorRadius());
+					Property("minor_radius", torus.MinorRadius());
+					break;
+				}
+				case GeomAbs_SurfaceOfRevolution:
+					AxisProperty(surface.AxeOfRevolution());
+					break;
+				case GeomAbs_SurfaceOfExtrusion:
+					Property("extrusion_direction", surface.Direction());
+					break;
+			}
+		}
+		void WriteFace(int id, const TopoDS_Face& face)
+		{
+			BRepAdaptor_Surface surface(face, Standard_True);
+			GeomAbs_SurfaceType surfaceType = surface.GetType();
+			BeginEntity("face", id);
+			Property("orientation", OrientationToString(face.Orientation()));
+			Property("type", SurfaceTypeToString(surfaceType));
+			BoundingBoxProperty(face);
+			//
+			GProp_GProps properties;
+			BRepGProp::SurfaceProperties(face, properties);
+			Property("area", properties.Mass());
+			Property("centroid", properties.CentreOfMass());
+			ShapeIdsProperty("edge_ids", face, TopAbs_EDGE, geometry->emap);
+			WriteSurfaceProperties(face, surface, surfaceType);
+			EndEntity();
+		}
+		void WriteCurveProperties(const BRepAdaptor_Curve& curve, GeomAbs_CurveType curveType)
+		{
+			switch (curveType)
+			{
+				case GeomAbs_Line:
+					AxisProperty(curve.Line().Position());
+					break;
+				case GeomAbs_Circle:
+				{
+					gp_Circ circle = curve.Circle();
+					PositionProperties(circle.Position());
+					Property("center", circle.Location());
+					Property("radius", circle.Radius());
+					Property("closed", curve.IsClosed() ? 1 : 0);
+					Property("sweep_angle_rad", std::abs(curve.LastParameter() - curve.FirstParameter()));
+					break;
+				}
+				case GeomAbs_Ellipse:
+				{
+					gp_Elips ellipse = curve.Ellipse();
+					PositionProperties(ellipse.Position());
+					Property("center", ellipse.Location());
+					Property("major_radius", ellipse.MajorRadius());
+					Property("minor_radius", ellipse.MinorRadius());
+					break;
+				}
+				case GeomAbs_Hyperbola:
+				{
+					gp_Hypr hyperbola = curve.Hyperbola();
+					PositionProperties(hyperbola.Position());
+					Property("center", hyperbola.Location());
+					Property("major_radius", hyperbola.MajorRadius());
+					Property("minor_radius", hyperbola.MinorRadius());
+					break;
+				}
+				case GeomAbs_Parabola:
+				{
+					gp_Parab parabola = curve.Parabola();
+					PositionProperties(parabola.Position());
+					Property("vertex", parabola.Location());
+					Property("focal_length", parabola.Focal());
+					break;
+				}
+			}
+		}
+		void WriteEdge(int id, const TopoDS_Edge& edge)
+		{
+			BRepAdaptor_Curve curve(edge);
+			GeomAbs_CurveType curveType = curve.GetType();
+			BeginEntity("edge", id);
+			Property("orientation", OrientationToString(edge.Orientation()));
+			Property("type", CurveTypeToString(curveType));
+			Property("degenerated", BRep_Tool::Degenerated(edge) ? 1 : 0);
+			BoundingBoxProperty(edge);
+			//
+			GProp_GProps properties;
+			BRepGProp::LinearProperties(edge, properties);
+			Property("length", properties.Mass());
+			Property("centroid", properties.CentreOfMass());
+			ShapeIdsProperty("vertex_ids", edge, TopAbs_VERTEX, geometry->vmap);
+			//
+			TopTools_IndexedMapOfShape parentFaces;
+			int faceUseCount = 0;
+			if (edgeFaceMap.Contains(edge))
+			{
+				const TopTools_ListOfShape& faces = edgeFaceMap.FindFromKey(edge);
+				for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next())
+				{
+					parentFaces.Add(it.Value());
+					faceUseCount++;
+				}
+			}
+			PropertyName("face_ids");
+			for (int i = 1; i <= parentFaces.Extent(); i++)
+			{
+				int faceId = geometry->fmap.FindIndex(parentFaces(i));
+				if (faceId > 0) outfile << " " << faceId;
+			}
+			outfile << endl;
+			Property("face_use_count", faceUseCount);
+			WriteCurveProperties(curve, curveType);
+			EndEntity();
+		}
+		void WriteVertex(int id, const TopoDS_Vertex& vertex)
+		{
+			BeginEntity("vertex", id);
+			Property("orientation", OrientationToString(vertex.Orientation()));
+			Property("coordinates", BRep_Tool::Pnt(vertex));
+			PropertyName("edge_ids");
+			if (vertexEdgeMap.Contains(vertex))
+			{
+				TopTools_IndexedMapOfShape parentEdges;
+				const TopTools_ListOfShape& edges = vertexEdgeMap.FindFromKey(vertex);
+				for (TopTools_ListIteratorOfListOfShape it(edges); it.More(); it.Next()) parentEdges.Add(it.Value());
+				for (int i = 1; i <= parentEdges.Extent(); i++)
+				{
+					int edgeId = geometry->emap.FindIndex(parentEdges(i));
+					if (edgeId > 0) outfile << " " << edgeId;
+				}
+			}
+			outfile << endl;
+			EndEntity();
+		}
+
+	public:
+		GeometryMetadataWriter(OCCGeometry* geometry, ofstream& outfile)
+			: geometry(geometry), outfile(outfile)
+		{
+			TopExp::MapShapesAndAncestors(geometry->shape, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
+			TopExp::MapShapesAndAncestors(geometry->shape, TopAbs_FACE, TopAbs_SOLID, faceSolidMap);
+			TopExp::MapShapesAndAncestors(geometry->shape, TopAbs_VERTEX, TopAbs_EDGE, vertexEdgeMap);
+		}
+		void Write()
+		{
+			// Every geometry entity is defined once before the tessellation. Each property is independent;
+			// readers ignore unknown names, and a missing line means that the property is unavailable.
+			outfile << "VIS file format: 2" << endl;
+			outfile << "Coordinate system: global" << endl;
+			outfile << "Length unit: model" << endl << endl;
+			outfile << "**********" << endl;
+			outfile << "Geometry" << endl;
+			outfile << "**********" << endl << endl;
+			outfile.precision(17);
+			//
+			outfile << "Number of solids: " << geometry->somap.Extent() << endl << endl;
+			for (int i = 1; i <= geometry->somap.Extent(); i++) WriteSolid(i, geometry->somap(i));
+			outfile << "Number of shells: " << geometry->shmap.Extent() << endl << endl;
+			for (int i = 1; i <= geometry->shmap.Extent(); i++) WriteShell(i, geometry->shmap(i));
+			outfile << "Number of faces: " << geometry->fmap.Extent() << endl << endl;
+			for (int i = 1; i <= geometry->fmap.Extent(); i++) WriteFace(i, TopoDS::Face(geometry->fmap(i)));
+			outfile << "Number of edges: " << geometry->emap.Extent() << endl << endl;
+			for (int i = 1; i <= geometry->emap.Extent(); i++) WriteEdge(i, TopoDS::Edge(geometry->emap(i)));
+			outfile << "Number of vertices: " << geometry->vmap.Extent() << endl << endl;
+			for (int i = 1; i <= geometry->vmap.Extent(); i++) WriteVertex(i, TopoDS::Vertex(geometry->vmap(i)));
+			outfile << "**********" << endl;
+			outfile << "Visualization" << endl;
+			outfile << "**********" << endl << endl;
+		}
+	};
+	void ExportVisualizationVertices(OCCGeometry* occgeom, ofstream& outfile)
+	{
+		outfile << "Number of visualization vertices: " << occgeom->vmap.Extent() << " (Id, X, Y, Z)" << endl;
+		for (int i = 1; i <= occgeom->vmap.Extent(); i++)
+		{
+			gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(occgeom->vmap(i)));
+			outfile << i << " " << to_string(point.X()) << " " << to_string(point.Y()) << " "
+				    << to_string(point.Z()) << "\n";
+		}
+		outfile << endl;
+	}
 	void ExportItemVisualization(OCCGeometry * occgeom, TopAbs_ShapeEnum TopAbs_Shape, ofstream &outfile,
 	                             int &numOfEdges, int &numOfFallbackEdges, int &numOfFacesWithoutTriangulation)
 	{
@@ -912,41 +1353,8 @@ namespace nglib
 		else if (TopAbs_Shape == TopAbs_SHELL) ToAvoid = TopAbs_SOLID;
 		else if (TopAbs_Shape == TopAbs_FACE) ToAvoid = TopAbs_SHELL;
 		//
-		// The vertex map covers the whole shape and does not depend on the item, so
-		// it is built once here instead of once per solid/shell. The per-item vertex
-		// block below is still written exactly as before - the file format is unchanged.
-		TopTools_IndexedMapOfShape map;
-		TopExp::MapShapes(occgeom->shape, TopAbs_VERTEX, map);
-		//
-		int itemnr = 0;
 		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_Shape, ToAvoid); exp0.More(); exp0.Next())
 		{
-			itemnr++;
-			outfile << "**********" << endl;
-			if (TopAbs_Shape == TopAbs_SOLID) outfile << "Solid number: ";
-			else if (TopAbs_Shape == TopAbs_SHELL) outfile << "Shell number: ";
-			else if (TopAbs_Shape == TopAbs_FACE) outfile << "Free face number: ";
-			//
-			outfile << itemnr << endl;
-			// Vertices	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-			int vertexnr;
-			gp_Pnt point;
-			TopoDS_Vertex vertex;
-			int nVertices = map.Extent();
-			//
-			outfile << "**********" << endl;
-			outfile << "Number of vertices: " << nVertices << " (Id, X, Y, Z)" << endl;
-			//
-			for (int i = 1; i <= map.Extent(); i++)
-			{
-				vertex = TopoDS::Vertex(map(i));
-				vertexnr = occgeom->vmap.FindIndex(vertex);
-				//
-				point = BRep_Tool::Pnt(vertex);
-				//
-				outfile << vertexnr << " " << to_string(point.X()) << " " << to_string(point.Y()) << " " << to_string(point.Z()) << "\n";
-			}
-			///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 			for (TopExp_Explorer exp1(exp0.Current(), TopAbs_FACE); exp1.More(); exp1.Next())
 			{
 				TopoDS_Face face = TopoDS::Face(exp1.Current());
@@ -955,12 +1363,8 @@ namespace nglib
 				BRepAdaptor_Surface faceElementAdaptor(face, Standard_True);
 				GeomAbs_SurfaceType surfaceType = faceElementAdaptor.GetType();
 				//
-				TopAbs_Orientation orientation = face.Orientation();
-				//
 				outfile << "**********" << endl;
-				outfile << "Face number: " << facenr << endl;
-				outfile << "Face orientation: " << orientation << endl;
-				outfile << "Face type: " << SurfaceTypeToString(surfaceType) << endl;
+				outfile << "Face mesh number: " << facenr << endl;
 				//
 				Handle(Poly_Triangulation) aTr = BRep_Tool::Triangulation(face, aLocation);
 				// If this triangulation is not NULL
@@ -995,7 +1399,7 @@ namespace nglib
 					TopTools_IndexedMapOfShape edges;
 					TopExp::MapShapes(exp1.Current(), TopAbs_EDGE, edges);
 					outfile << "**********" << endl;
-					outfile << "Number of edges: " << edges.Extent() << " (Type, Id, N1, N2, N3 ...)" << endl;
+					outfile << "Number of edge polylines: " << edges.Extent() << " (Edge Id, N1, N2, N3 ...)" << endl;
 					//
 					bool searchNodeByNode;
 					GProp_GProps system;
@@ -1010,9 +1414,6 @@ namespace nglib
 						TopoDS_Edge edge = TopoDS::Edge(exp2.Current());
 						edgenr = occgeom->emap.FindIndex(edge);
 						numOfEdges++;
-						//
-						BRepAdaptor_Curve edgeElementAdaptor(edge);
-						GeomAbs_CurveType edgeType = edgeElementAdaptor.GetType();
 						//
 						// If this edge is not NULL
 						if (!edge.IsNull())
@@ -1031,8 +1432,7 @@ namespace nglib
 								// written out directly - no per-node verification needed.
 								const TColStd_Array1OfInteger& aNodesOfPol = aPol->Nodes();
 								{
-									// Edge type and id
-									outfile << CurveTypeToString(edgeType) << " " << edgenr;	// edge type and ID - 1st time
+									outfile << "Edge polyline: " << edgenr;
 									// Takes the array of nodes for this polygon (indexes in the array of nodes for triangulation of theFace)
 									for (Standard_Integer i = 1; i <= aNodesOfPol.Length(); i++)
 									{
@@ -1110,7 +1510,7 @@ namespace nglib
 								}
 								if (endId == -1) endId = minId;
 								//
-								outfile << CurveTypeToString(edgeType) << " " << edgenr; // edge type and ID - 2nd time
+								outfile << "Edge polyline: " << edgenr;
 								outfile << " " << startId;
 								//
 								extrema.LoadS1(edge);
@@ -1145,38 +1545,6 @@ namespace nglib
 				}
 			}
 		}
-		//
-		GProp_GProps props;
-		if (TopAbs_Shape == TopAbs_SOLID) BRepGProp::VolumeProperties(occgeom->shape, props);
-		else if (TopAbs_Shape == TopAbs_SHELL) BRepGProp::SurfaceProperties(occgeom->shape, props);
-		else if (TopAbs_Shape == TopAbs_FACE) BRepGProp::SurfaceProperties(occgeom->shape, props);
-		//
-		double mass = props.Mass();
-		gp_Pnt cg = props.CentreOfMass();
-		gp_Mat im = props.MatrixOfInertia();
-		gp_Mat H;
-		GProp::HOperator(cg, gp_Pnt(0, 0, 0), mass, H);
-		gp_Mat im0 = im;
-		im0.Add(H);
-		//
-		outfile.precision(8);
-		//
-		outfile << "**********" << endl;
-		outfile << "Geometry properties" << endl;
-		outfile << "**********" << endl;
-		if (TopAbs_Shape == TopAbs_SOLID) outfile << "Volume: ";
-		else if (TopAbs_Shape == TopAbs_SHELL) outfile << "Area: ";
-		else if (TopAbs_Shape == TopAbs_FACE) outfile << "Area: ";
-		outfile << mass << endl;
-		outfile << "Center of mass: " << cg.Coord().X() << " " << cg.Coord().Y() << " " << cg.Coord().Z() << endl;
-		outfile << "Matrix of inertia around the center of mass:" << endl;
-		outfile << im(1, 1) << " " << im(1, 2) << " " << im(1, 3) << endl;
-		outfile << im(2, 1) << " " << im(2, 2) << " " << im(2, 3) << endl;
-		outfile << im(3, 1) << " " << im(3, 2) << " " << im(3, 3) << endl;
-		outfile << "Matrix of inertia around the origin:" << endl;
-		outfile << im0(1, 1) << " " << im0(1, 2) << " " << im0(1, 3) << endl;
-		outfile << im0(2, 1) << " " << im0(2, 2) << " " << im0(2, 3) << endl;
-		outfile << im0(3, 1) << " " << im0(3, 2) << " " << im0(3, 3) << endl;
 	}
 	void SearchConnectedShapes(int currShapeNr, list<int> * connection, list<int> * connectedShapes, int * shapesToVisit)
 	{
@@ -1834,6 +2202,11 @@ namespace nglib
 		// Faces BRepMesh could not triangulate. They are written without any nodes,
 		// triangles or edges, so PrePoMax silently ends up with a part full of holes.
 		int numOfFacesWithoutTriangulation = 0;
+		cout << "Exporting geometry definitions:";
+		GeometryMetadataWriter metadataWriter(occgeom, outfile);
+		metadataWriter.Write();
+		ExportVisualizationVertices(occgeom, outfile);
+		cout << " ... done" << endl;
 		// Free Solids
 		int numOfSolids = occgeom->somap.Extent();
 		if (numOfSolids > 0)
@@ -2237,7 +2610,7 @@ namespace nglib
 
 		mparam.checkoverlap = check_overlap;
 		mparam.checkoverlappingboundary = check_overlapping_boundary;
-		mparam.parallel_meshing_threads = parallel_meshing_threads;
+		mparam.parallel_meshing_threads = parallel_meshing_threads > 0 ? parallel_meshing_threads : 1;
 	}
 	// ------------------ End - Meshing Parameters related functions --------------------
 

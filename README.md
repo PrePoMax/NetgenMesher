@@ -15,6 +15,10 @@ which is also where its licence texts and dll inventory are documented.
 | `NetgenMesher/` | Build output. `Release` is the configuration PrePoMax ships. |
 | `redist/` | Visual C++ runtime dlls copied next to the output by `copy_runtime_dlls.bat`. |
 
+`BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
+CAD properties before a separate tessellation section. The extensible line format is documented in
+[VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).
+
 ## Building
 
 Both solutions build **x64**, and nglib must be built first because the front end links `nglib.lib`:
