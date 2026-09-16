@@ -28,6 +28,8 @@
 #include <BOPTools_AlgoTools.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
+#include <BRep_Builder.hxx>
+#include <TopoDS_Compound.hxx>
 
 
 namespace netgen
@@ -1141,6 +1143,54 @@ namespace netgen
 		BRepTools::Write(aBuilder.Shape(), argv[argc - 1], Message_ProgressRange());
 		//
 		return true;		
+	}
+	
+	bool CreateAssemblyFromBrep(int argc, char* argv[], bool saveAsStep)
+	{
+		// argv[0]		...	exe					
+		// argv[1]		...	function			
+		// argv[2]		...	input brep file name
+		// argv[3]		...	input brep file name
+		// ...									
+		// argv[n-1]	...	input brep file name
+		// argv[n]		...	output file name	
+		//
+		// The shapes are gathered into a compound without a boolean operation, so that every part
+		// keeps the geometry it was written with
+		BRep_Builder builder;
+		TopoDS_Compound compound;
+		OCCGeometry * occgeom;
+		int numOfFiles = argc - 3;
+		//
+		builder.MakeCompound(compound);
+		//
+		for (int i = 0; i < numOfFiles; i++)
+		{
+			occgeom = LoadOCC_BREP(argv[i + 2]);
+			if (!occgeom)
+			{
+				stringstream ss;
+				ss << argv[i + 2];
+				//
+				PrintMessage(1, "The file " + ss.str() + " is empty or not found.");
+				return false;
+			}
+			builder.Add(compound, occgeom->shape);
+		}
+		//
+		if (saveAsStep)
+		{
+			STEPControl_Writer writer;
+			writer.Transfer(compound, STEPControl_AsIs);
+			if (writer.Write(argv[argc - 1]) != IFSelect_RetDone)
+			{
+				PrintMessage(1, "Writing the STEP file failed.");
+				return false;
+			}
+		}
+		else BRepTools::Write(compound, argv[argc - 1], Message_ProgressRange());
+		//
+		return true;
 	}
 	
 	OCCGeometry * SplitAFaceUsingTwoPoints(OCCGeometry * occgeom, int faceId, double x1, double y1, double z1, double x2, double y2, double z2)

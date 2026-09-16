@@ -2373,6 +2373,25 @@ namespace nglib
 		}
 	}
 
+	DLL_HEADER Ng_Result Ng_OCC_CreateAssemblyFromBrep(int argc, char* argv[], bool saveAsStep)
+	{
+		try
+		{
+			if (CreateAssemblyFromBrep(argc, argv, saveAsStep))
+				return NG_OK;
+			else
+			{
+				PrintMessage(1, "An error occurred in CreateAssemblyFromBrep.");
+				return NG_ERROR;
+			}
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_CreateAssemblyFromBrep.");
+			return NG_ERROR;
+		}
+	}
+
 	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_ScaleGeometry(Ng_OCC_Geometry * geom, double Tx, double Ty, double Tz, double sx, double sy, double sz)
 	{
 		try

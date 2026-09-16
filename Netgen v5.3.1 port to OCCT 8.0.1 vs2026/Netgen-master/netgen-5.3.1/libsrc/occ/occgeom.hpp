@@ -470,6 +470,7 @@ namespace netgen
 	OCCGeometry * LoadOCC_BREP(const char * filename);
 
 	bool CreateCompoundFromBrep(int argc, char* argv[]);
+	bool CreateAssemblyFromBrep(int argc, char* argv[], bool saveAsStep);
 	OCCGeometry * ScaleGeometry(OCCGeometry * occgeom, double Tx, double Ty, double Tz, double sx, double sy, double sz);
 	OCCGeometry * SplitAFaceUsingTwoPoints(OCCGeometry * occgeom, int faceId, double x1, double y1, double z1, double x2, double y2, double z2);
 

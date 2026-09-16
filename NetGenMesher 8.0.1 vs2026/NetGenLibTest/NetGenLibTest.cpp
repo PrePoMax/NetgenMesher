@@ -36,6 +36,7 @@ bool AssemblySplitBrepToCompounds(int argc, char* argv[]);
 bool AssemblySplitBrepToParts(int argc, char* argv[]);
 // Assembly - Create
 bool CompoundBrep(int argc, char* argv[]);
+bool AssemblyBrep(int argc, char* argv[], bool saveAsStep);
 // Part
 bool SaveBrepAsStep(int argc, char* argv[]);
 // Visualization
@@ -124,6 +125,8 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_ASSEMBLY_SPLIT_TO_PARTS") == 0) return AssemblySplitBrepToParts(argc, argv);
 	// Assembly - Create
 	else if (strcmp(argv[1], "BREP_COMPOUND") == 0) return CompoundBrep(argc, argv);
+	else if (strcmp(argv[1], "BREP_ASSEMBLY") == 0) return AssemblyBrep(argc, argv, false);
+	else if (strcmp(argv[1], "STEP_ASSEMBLY") == 0) return AssemblyBrep(argc, argv, true);
 	// Part
 	else if (strcmp(argv[1], "SAVE_BREP_AS_STEP") == 0) return SaveBrepAsStep(argc, argv);
 	// Visualization
@@ -208,6 +211,10 @@ void PrintUsage(const char* exePath)
 	cout << endl;
 	cout << "Assembly - create" << endl;
 	cout << "  BREP_COMPOUND                      <in1.brep> <in2.brep> [...] <out.brep>" << endl;
+	cout << "  BREP_ASSEMBLY                      <in1.brep> <in2.brep> [...] <out.brep>" << endl;
+	cout << "  STEP_ASSEMBLY                      <in1.brep> <in2.brep> [...] <out.step>" << endl;
+	cout << "      BREP_COMPOUND imprints the parts on one another; the two assembly" << endl;
+	cout << "      commands only gather them into one compound, unchanged." << endl;
 	cout << endl;
 	cout << "Part" << endl;
 	cout << "  SAVE_BREP_AS_STEP                  <in.brep> <out.step>" << endl;
@@ -356,6 +363,27 @@ bool CompoundBrep(int argc, char* argv[])
 		if (ng_res != NG_OK)
 		{
 			cout << "Error combining BREP files." << endl;
+			return 1;
+		}
+		return 0;
+	}
+	catch (exception ex)
+	{
+		return 1;
+	}
+}
+bool AssemblyBrep(int argc, char* argv[], bool saveAsStep)
+{
+	try
+	{
+		// Result of Netgen Operations
+		Ng_Result ng_res;
+		//
+		ng_res = Ng_OCC_CreateAssemblyFromBrep(argc, argv, saveAsStep);
+		//
+		if (ng_res != NG_OK)
+		{
+			cout << "Error joining BREP files." << endl;
 			return 1;
 		}
 		return 0;
@@ -1318,9 +1346,14 @@ Ng_Meshing_Parameters ReadParameters(const char *fileName, double &deflection)
 		// Optional OCC visualization deflection used by BREP meshing.
 		if (getline(File, line) && getline(File, line) && !line.empty())
 			deflection = std::stod(line);
-		// Optional parallel meshing worker count: 0 = automatic, 1 = serial.
+		// Optional positive parallel meshing worker count: 1 = serial.
 		if (getline(File, line) && getline(File, line) && !line.empty())
-			mp.parallel_meshing_threads = std::stoi(line);
+		{
+			int threadCount = std::stoi(line);
+			if (threadCount < 1)
+				throw std::invalid_argument("parallel_meshing_threads must be larger than 0.");
+			mp.parallel_meshing_threads = threadCount;
+		}
 		//
 		File.close();
 	}

@@ -129,7 +129,7 @@ public:
    int check_overlap;                  //!< Check for overlapping surfaces during Surface meshing
    int check_overlapping_boundary;     //!< Check for overlapping surface elements before volume meshing
 
-   int parallel_meshing_threads;       //!< OCC meshing workers: 1 = serial, 0 = automatic, >1 = explicit limit
+   int parallel_meshing_threads;       //!< Positive OCC meshing worker count: 1 = serial, >1 = parallel
 
 
    /*!
@@ -711,6 +711,8 @@ DLL_HEADER int Ng_OCC_WriteAssemblyAsSolidParts(Ng_OCC_Geometry * geom, int coun
 DLL_HEADER int Ng_OCC_WriteAssemblyAsShellParts(Ng_OCC_Geometry * geom, int countStart, const char* filename, int numOfSplitFaces);
 
 DLL_HEADER Ng_Result Ng_OCC_CreateCompoundFromBrep(int argc, char* argv[]);
+
+DLL_HEADER Ng_Result Ng_OCC_CreateAssemblyFromBrep(int argc, char* argv[], bool saveAsStep);
 
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_ScaleGeometry(Ng_OCC_Geometry * geom, double Tx, double Ty, double Tz, double sx, double sy, double sz);
 
