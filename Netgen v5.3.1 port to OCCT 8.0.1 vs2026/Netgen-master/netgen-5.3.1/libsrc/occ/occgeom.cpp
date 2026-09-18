@@ -1103,6 +1103,9 @@ namespace netgen
 		//https://www.opencascade.com/content/partition-operation-done-programatically
 		//
 		BOPAlgo_Builder aBuilder;
+		// The general fuse is single threaded by default and its cost grows sharply with the
+		// number of arguments, so it is run in parallel - the resulting shape is the same
+		aBuilder.SetRunParallel(Standard_True);
 		OCCGeometry * occgeom;
 		int numOfFiles = argc - 3;
 		//
@@ -1229,6 +1232,7 @@ namespace netgen
 			//BRepTools::Write(projector.Projection(), "C:\\Temp\\projection.brep");
 			//
 			BOPAlgo_Builder aBuilder;
+			aBuilder.SetRunParallel(Standard_True);
 			aBuilder.AddArgument(occgeom->shape);
 			aBuilder.AddArgument(projector.Projection());
 			aBuilder.Perform();

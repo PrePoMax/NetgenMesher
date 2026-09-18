@@ -1782,6 +1782,7 @@ namespace nglib
 			else if (oneConnection.size() > 1)
 			{
 				BOPAlgo_Builder aBuilder;
+				aBuilder.SetRunParallel(Standard_True);
 				//
 				for (std::list<int>::iterator it2 = oneConnection.begin(); it2 != oneConnection.end(); it2++)
 				{
@@ -1914,6 +1915,7 @@ namespace nglib
 			else if (oneConnection.size() > 1)
 			{
 				BOPAlgo_Builder aBuilder;
+				aBuilder.SetRunParallel(Standard_True);
 				//
 				for (std::list<int>::iterator it2 = oneConnection.begin(); it2 != oneConnection.end(); it2++)
 				{
