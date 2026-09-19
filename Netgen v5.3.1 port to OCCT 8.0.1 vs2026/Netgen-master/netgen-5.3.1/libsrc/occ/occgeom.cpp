@@ -30,6 +30,12 @@
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRep_Builder.hxx>
 #include <TopoDS_Compound.hxx>
+#include <BRepAlgoAPI_Splitter.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <Geom_Plane.hxx>
+#include <TopTools_ListOfShape.hxx>
+#include <Precision.hxx>
 
 
 namespace netgen
@@ -1250,6 +1256,183 @@ namespace netgen
 		return occgeom;
 	}
 
+	// A splitting tool has to be larger than everything it cuts, and the same tool is applied to every
+	// part of a region, so the caller passes the extent it must cover as x_min x_max y_min y_max z_min z_max
+	// rather than letting each part size a tool of its own.
+	static bool GetToolSurfaceParameterRange(const Handle(Geom_Surface) & surface, const double * extent,
+	                                         double & uMin, double & uMax, double & vMin, double & vMax)
+	{
+		double u1, u2, v1, v2;
+		surface->Bounds(u1, u2, v1, v2);
+		//
+		bool uPeriodic = surface->IsUPeriodic() == Standard_True;
+		bool vPeriodic = surface->IsVPeriodic() == Standard_True;
+		bool uInfinite = Precision::IsInfinite(u1) || Precision::IsInfinite(u2);
+		bool vInfinite = Precision::IsInfinite(v1) || Precision::IsInfinite(v2);
+		//
+		if (uPeriodic) { uMin = u1; uMax = u1 + surface->UPeriod(); }
+		else if (!uInfinite) { uMin = u1; uMax = u2; }
+		if (vPeriodic) { vMin = v1; vMax = v1 + surface->VPeriod(); }
+		else if (!vInfinite) { vMin = v1; vMax = v2; }
+		// An infinite direction is trimmed to the projection of the extent box, padded so that the tool
+		// reaches past the geometry instead of ending exactly on it
+		if ((uInfinite && !uPeriodic) || (vInfinite && !vPeriodic))
+		{
+			double uLow = 1e100, uHigh = -1e100, vLow = 1e100, vHigh = -1e100;
+			ShapeAnalysis_Surface analysis(surface);
+			for (int i = 0; i < 8; i++)
+			{
+				gp_Pnt corner(extent[i & 1], extent[2 + ((i >> 1) & 1)], extent[4 + ((i >> 2) & 1)]);
+				gp_Pnt2d uv = analysis.ValueOfUV(corner, Precision::Confusion());
+				uLow = min2(uLow, uv.X()); uHigh = max2(uHigh, uv.X());
+				vLow = min2(vLow, uv.Y()); vHigh = max2(vHigh, uv.Y());
+			}
+			double diagonal = sqrt((extent[1] - extent[0]) * (extent[1] - extent[0]) +
+			                       (extent[3] - extent[2]) * (extent[3] - extent[2]) +
+			                       (extent[5] - extent[4]) * (extent[5] - extent[4]));
+			if (diagonal <= 0) return false;
+			//
+			if (uInfinite && !uPeriodic)
+			{
+				double pad = max2(0.1 * (uHigh - uLow), 0.05 * diagonal);
+				uMin = uLow - pad; uMax = uHigh + pad;
+			}
+			if (vInfinite && !vPeriodic)
+			{
+				double pad = max2(0.1 * (vHigh - vLow), 0.05 * diagonal);
+				vMin = vLow - pad; vMax = vHigh + pad;
+			}
+		}
+		//
+		return uMax > uMin && vMax > vMin;
+	}
+	static TopoDS_Shape MakeToolFaceFromSurface(const Handle(Geom_Surface) & surface, const double * extent)
+	{
+		double uMin, uMax, vMin, vMax;
+		if (!GetToolSurfaceParameterRange(surface, extent, uMin, uMax, vMin, vMax)) return TopoDS_Shape();
+		//
+		BRepBuilderAPI_MakeFace faceMaker(surface, uMin, uMax, vMin, vMax, Precision::Confusion());
+		if (!faceMaker.IsDone()) return TopoDS_Shape();
+		//
+		return faceMaker.Face();
+	}
+	// The general fuse would keep the fragments of the tool itself in the result, so a splitting
+	// operation uses the splitter, which splits the arguments and drops what is left of the tools
+	static OCCGeometry * SplitWithTool(OCCGeometry * occgeom, const TopoDS_Shape & tool, double fuzzyValue)
+	{
+		if (tool.IsNull())
+		{
+			PrintMessage(1, "The splitting tool could not be created.");
+			return occgeom;
+		}
+		//
+		TopTools_ListOfShape arguments;
+		TopTools_ListOfShape tools;
+		arguments.Append(occgeom->shape);
+		tools.Append(tool);
+		//
+		BRepAlgoAPI_Splitter splitter;
+		splitter.SetArguments(arguments);
+		splitter.SetTools(tools);
+		splitter.SetRunParallel(Standard_True);
+		splitter.SetNonDestructive(Standard_True);
+		if (fuzzyValue > 0) splitter.SetFuzzyValue(fuzzyValue);
+		splitter.Build();
+		//
+		if (splitter.HasErrors())
+		{
+			PrintMessage(1, "The split command failed.");
+			return occgeom;
+		}
+		//
+		occgeom->shape = splitter.Shape();
+		occgeom->changed = 1;
+		occgeom->BuildFMap();
+		//
+		return occgeom;
+	}
+	OCCGeometry * SplitWithPlane(OCCGeometry * occgeom, double * origin, double * normal, double * extent,
+	                             double fuzzyValue)
+	{
+		gp_Vec direction(normal[0], normal[1], normal[2]);
+		if (direction.Magnitude() <= Precision::Confusion())
+		{
+			PrintMessage(1, "The splitting plane normal is zero.");
+			return occgeom;
+		}
+		//
+		gp_Pln plane(gp_Pnt(origin[0], origin[1], origin[2]), gp_Dir(direction));
+		Handle(Geom_Plane) surface = new Geom_Plane(plane);
+		//
+		return SplitWithTool(occgeom, MakeToolFaceFromSurface(surface, extent), fuzzyValue);
+	}
+	OCCGeometry * SplitWithExtendedFace(OCCGeometry * occgeom, OCCGeometry * sourcegeom, int faceId,
+	                                    double * extent, double fuzzyValue)
+	{
+		if (sourcegeom == NULL) sourcegeom = occgeom;
+		//
+		if (faceId < 1 || faceId > sourcegeom->fmap.Extent())
+		{
+			PrintMessage(1, "The face to extend does not exist.");
+			return occgeom;
+		}
+		//
+		TopoDS_Face face = TopoDS::Face(sourcegeom->fmap(faceId));
+		Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
+		if (surface.IsNull())
+		{
+			PrintMessage(1, "The face to extend carries no surface.");
+			return occgeom;
+		}
+		//
+		return SplitWithTool(occgeom, MakeToolFaceFromSurface(surface, extent), fuzzyValue);
+	}
+	OCCGeometry * SplitWithExtrudedEdges(OCCGeometry * occgeom, OCCGeometry * sourcegeom, int * edgeIds,
+	                                     int numOfEdgeIds, double * offset, double * vector, double fuzzyValue)
+	{
+		if (sourcegeom == NULL) sourcegeom = occgeom;
+		//
+		gp_Vec extrusion(vector[0], vector[1], vector[2]);
+		if (extrusion.Magnitude() <= Precision::Confusion())
+		{
+			PrintMessage(1, "The extrusion vector is zero.");
+			return occgeom;
+		}
+		//
+		BRep_Builder builder;
+		TopoDS_Compound profile;
+		builder.MakeCompound(profile);
+		//
+		int numOfEdges = 0;
+		for (int i = 0; i < numOfEdgeIds; i++)
+		{
+			if (edgeIds[i] < 1 || edgeIds[i] > sourcegeom->emap.Extent()) continue;
+			builder.Add(profile, sourcegeom->emap(edgeIds[i]));
+			numOfEdges++;
+		}
+		if (numOfEdges == 0)
+		{
+			PrintMessage(1, "The edges to extrude do not exist.");
+			return occgeom;
+		}
+		//
+		TopoDS_Shape shifted = profile;
+		if (offset[0] != 0 || offset[1] != 0 || offset[2] != 0)
+		{
+			gp_Trsf trsf;
+			trsf.SetTranslation(gp_Vec(offset[0], offset[1], offset[2]));
+			shifted = BRepBuilderAPI_Transform(profile, trsf, true).Shape();
+		}
+		//
+		BRepPrimAPI_MakePrism prismMaker(shifted, extrusion);
+		if (!prismMaker.IsDone())
+		{
+			PrintMessage(1, "The extruded splitting tool could not be created.");
+			return occgeom;
+		}
+		//
+		return SplitWithTool(occgeom, prismMaker.Shape(), fuzzyValue);
+	}
 	OCCGeometry * ScaleGeometry(OCCGeometry * occgeom, double Tx, double Ty, double Tz, double sx, double sy, double sz)
 	{
 		if (sx == sy && sy == sz)

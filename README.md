@@ -15,6 +15,15 @@ which is also where its licence texts and dll inventory are documented.
 | `NetgenMesher/` | Build output. `Release` is the configuration PrePoMax ships. |
 | `redist/` | Visual C++ runtime dlls copied next to the output by `copy_runtime_dlls.bat`. |
 
+`BREP_SPLIT` splits a part with a tool built from a plane, from a face continued past its boundary, or from
+edges swept along a direction. The tool is described by a small `<property>: <values>` text file whose grammar
+follows the `.vis` format - unknown properties are ignored, and a missing property keeps its default - so a new
+kind of tool can be added without changing the command line. The caller passes the `Extent` the tool has to
+cover, because one tool is applied to every part of a region and a tool sized per part would come out different
+for each of them. Face and edge ids are read from `Source file` when one is given, which is what lets one part's
+geometry split another. The command reports a failure when the tool added no faces, since the modelling kernel
+returns a shape whether or not it made the cut. Run the executable with no arguments for the full grammar.
+
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).

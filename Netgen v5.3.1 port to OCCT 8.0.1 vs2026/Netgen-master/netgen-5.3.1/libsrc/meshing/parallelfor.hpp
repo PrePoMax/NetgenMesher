@@ -15,12 +15,10 @@
 namespace netgen
 {
   /// Worker count for item_count independent items, from mp.parallel_meshing_threads
-  /// (1 = serial, 0 = as many as the hardware reports).
+  /// (1 = serial, greater than 1 = explicit worker count).
   inline int ParallelMeshingThreads (const MeshingParameters & mp, int item_count)
   {
     int threads = mp.parallel_meshing_threads;
-    if (threads == 0)
-      threads = (int) std::thread::hardware_concurrency();
     if (threads < 1)
       threads = 1;
     if (threads > item_count)

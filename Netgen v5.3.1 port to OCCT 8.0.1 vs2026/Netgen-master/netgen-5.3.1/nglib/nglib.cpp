@@ -45,6 +45,7 @@
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <BRep_TEdge.hxx>
 #include <BRepTools.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
@@ -1245,6 +1246,17 @@ namespace nglib
 			BRepGProp::LinearProperties(edge, properties);
 			Property("length", properties.Mass());
 			Property("centroid", properties.CentreOfMass());
+			// The point half way along the edge, which is what a user means by its midpoint. It is not
+			// the centroid: the centroid of an arc does not lie on the arc.
+			if (!BRep_Tool::Degenerated(edge))
+			{
+				double curveLength = GCPnts_AbscissaPoint::Length(curve);
+				if (curveLength > 0)
+				{
+					GCPnts_AbscissaPoint midpoint(curve, curveLength / 2, curve.FirstParameter());
+					if (midpoint.IsDone()) Property("midpoint", curve.Value(midpoint.Parameter()));
+				}
+			}
 			ShapeIdsProperty("vertex_ids", edge, TopAbs_VERTEX, geometry->vmap);
 			//
 			TopTools_IndexedMapOfShape parentFaces;
@@ -2433,6 +2445,57 @@ namespace nglib
 		{
 			PrintMessage(1, "An error occurred in Ng_OCC_SplitAFaceUsingTwoPoints.");
 		}
+	}
+
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithPlane(Ng_OCC_Geometry * geom, double * origin, double * normal,
+	                                                   double * extent, double fuzzyValue)
+	{
+		try
+		{
+			OCCGeometry * occgeom = (OCCGeometry*)geom;
+			occgeom = SplitWithPlane(occgeom, origin, normal, extent, fuzzyValue);
+			return ((Ng_OCC_Geometry *)occgeom);
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_SplitWithPlane.");
+		}
+		return geom;
+	}
+
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom, Ng_OCC_Geometry * sourceGeom,
+	                                                          int faceId, double * extent, double fuzzyValue)
+	{
+		try
+		{
+			OCCGeometry * occgeom = (OCCGeometry*)geom;
+			OCCGeometry * sourceoccgeom = (OCCGeometry*)sourceGeom;
+			occgeom = SplitWithExtendedFace(occgeom, sourceoccgeom, faceId, extent, fuzzyValue);
+			return ((Ng_OCC_Geometry *)occgeom);
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_SplitWithExtendedFace.");
+		}
+		return geom;
+	}
+
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtrudedEdges(Ng_OCC_Geometry * geom, Ng_OCC_Geometry * sourceGeom,
+	                                                           int * edgeIds, int numOfEdgeIds, double * offset,
+	                                                           double * vector, double fuzzyValue)
+	{
+		try
+		{
+			OCCGeometry * occgeom = (OCCGeometry*)geom;
+			OCCGeometry * sourceoccgeom = (OCCGeometry*)sourceGeom;
+			occgeom = SplitWithExtrudedEdges(occgeom, sourceoccgeom, edgeIds, numOfEdgeIds, offset, vector, fuzzyValue);
+			return ((Ng_OCC_Geometry *)occgeom);
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_SplitWithExtrudedEdges.");
+		}
+		return geom;
 	}
 
 	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ConvertToShell(Ng_OCC_Geometry* geom)

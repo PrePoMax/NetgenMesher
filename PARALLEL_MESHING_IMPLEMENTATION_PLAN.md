@@ -5,9 +5,8 @@
 Parallelize independent OCC meshing work while preserving stable global numbering,
 the existing serial behavior, and failure semantics.
 
-The public `parallel_meshing_threads` parameter controls the implementation:
+The public `parallel_meshing_threads` parameter is a positive integer:
 
-- `0`: let the OpenCASCADE thread pool select the worker count.
 - `1`: use the legacy serial path. This remains the default.
 - `>1`: use at most the requested number of workers.
 
@@ -293,7 +292,6 @@ termination into a reported failure, so the next occurrence names its cause.
   and 5,866 surface elements every time.
 - Six repeated four-worker face-generation plus 2-D-optimization runs produced
   2,907 surface points and 5,826 surface elements every time.
-- Automatic worker selection produced the same optimized parallel surface counts.
 - The serial compatibility run reproduced 2,925 surface points and 5,862 surface
   elements.
 - All complete surface tests continued through successful volume meshing.

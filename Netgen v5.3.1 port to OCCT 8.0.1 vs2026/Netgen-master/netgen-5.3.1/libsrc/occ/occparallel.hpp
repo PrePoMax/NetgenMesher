@@ -24,7 +24,7 @@ namespace netgen
 
   public:
     explicit OCCParallelMeshingContext(int requested_threads)
-      : pool(requested_threads == 0 ? -1 : std::max(1, requested_threads)),
+      : pool(std::max(1, requested_threads)),
         thread_count(pool.NbThreads())
     {
     }

@@ -473,6 +473,9 @@ namespace netgen
 	bool CreateAssemblyFromBrep(int argc, char* argv[], bool saveAsStep);
 	OCCGeometry * ScaleGeometry(OCCGeometry * occgeom, double Tx, double Ty, double Tz, double sx, double sy, double sz);
 	OCCGeometry * SplitAFaceUsingTwoPoints(OCCGeometry * occgeom, int faceId, double x1, double y1, double z1, double x2, double y2, double z2);
+	OCCGeometry * SplitWithPlane(OCCGeometry * occgeom, double * origin, double * normal, double * extent, double fuzzyValue);
+	OCCGeometry * SplitWithExtendedFace(OCCGeometry * occgeom, OCCGeometry * sourcegeom, int faceId, double * extent, double fuzzyValue);
+	OCCGeometry * SplitWithExtrudedEdges(OCCGeometry * occgeom, OCCGeometry * sourcegeom, int * edgeIds, int numOfEdgeIds, double * offset, double * vector, double fuzzyValue);
 
 	extern OCCParameters occparam;
 

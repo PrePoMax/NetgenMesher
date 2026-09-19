@@ -720,6 +720,12 @@ DLL_HEADER Ng_OCC_Geometry * Ng_OCC_ReverseFaceOrientations(Ng_OCC_Geometry * ge
 
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitAFaceUsingTwoPoints(Ng_OCC_Geometry * geom, int faceId, double x1, double y1, double z1, double x2, double y2, double z2);
 
+DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithPlane(Ng_OCC_Geometry * geom, double * origin, double * normal, double * extent, double fuzzyValue);
+
+DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom, Ng_OCC_Geometry * sourceGeom, int faceId, double * extent, double fuzzyValue);
+
+DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtrudedEdges(Ng_OCC_Geometry * geom, Ng_OCC_Geometry * sourceGeom, int * edgeIds, int numOfEdgeIds, double * offset, double * vector, double fuzzyValue);
+
 DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ConvertToShell(Ng_OCC_Geometry* geom);
 
 DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ConvertToSolid(Ng_OCC_Geometry* geom);

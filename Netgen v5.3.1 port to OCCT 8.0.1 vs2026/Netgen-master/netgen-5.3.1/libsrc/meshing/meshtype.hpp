@@ -1062,7 +1062,7 @@ namespace netgen
     double segmentsperedge;
     /// use parallel threads
     int parthread;
-    /// number of worker threads used inside OCC meshing (1 = serial, 0 = automatic)
+    /// positive number of meshing threads (1 = serial, greater than 1 = parallel)
     int parallel_meshing_threads;
     /// weight of element size w.r.t element shape
     double elsizeweight;

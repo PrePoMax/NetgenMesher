@@ -98,6 +98,8 @@ analytic geometry parameters where they exist. `axis` has six values in this ord
 directions of an analytic geometry's OpenCASCADE position. Bounding boxes use
 `x_min x_max y_min y_max z_min z_max`. An inertia tensor is one row-major sequence of nine values.
 
+Every edge that is not degenerated provides `midpoint`, the point half way along it by arc length. It is not the `centroid`: the centroid of an arc does not lie on the arc. For a complete circle the midpoint falls opposite the seam and means nothing, so `closed` is what a reader checks before using it.
+
 Circular edges provide `closed` (`1` for a complete circle, otherwise `0`) and `sweep_angle_rad`. The sweep is the
 absolute OpenCASCADE curve-parameter span, so a semicircle reports pi and a complete circle reports 2 pi.
 

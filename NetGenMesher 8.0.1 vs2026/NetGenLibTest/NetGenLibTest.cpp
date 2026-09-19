@@ -5,6 +5,7 @@
 #include <fstream>
 #include <string>
 #include <sstream>
+#include <vector>
 #include <chrono>
 
 #include <climits>
@@ -45,6 +46,7 @@ bool OccVisualization(int argc, char* argv[]);
 bool ScaleGeometry(int argc, char* argv[]);
 bool ReverseBrepFaceOrientations(int argc, char* argv[]);
 bool SplitAFaceUsingTwoPoints(int argc, char* argv[]);
+bool SplitGeometry(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool ConvertToSolid(int argc, char* argv[]);
 // Stl Mesh
@@ -135,6 +137,7 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_SCALE_GEOMETRY") == 0) return ScaleGeometry(argc, argv);
 	else if (strcmp(argv[1], "BREP_REVERSE_FACES") == 0) return ReverseBrepFaceOrientations(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT_A_FACE_USING_TWO_POINTS") == 0) return SplitAFaceUsingTwoPoints(argc, argv);
+	else if (strcmp(argv[1], "BREP_SPLIT") == 0) return SplitGeometry(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
 	// Stl Mesh
@@ -230,6 +233,22 @@ void PrintUsage(const char* exePath)
 	cout << "  BREP_REVERSE_FACES                 <in.brep> <out.brep>" << endl;
 	cout << "  BREP_SPLIT_A_FACE_USING_TWO_POINTS <in.brep> <out.brep> <faceId>" << endl;
 	cout << "                                     <x1> <y1> <z1> <x2> <y2> <z2>" << endl;
+	cout << "  BREP_SPLIT                         <in.brep> <out.brep> <toolDefinition>" << endl;
+	cout << "      <toolDefinition> is a text file of <property>: <values> lines that" << endl;
+	cout << "      define the splitting tool.  Every tool accepts" << endl;
+	cout << "        Tool type: Plane | ExtendFace | ExtrudeEdges" << endl;
+	cout << "        Extent: x_min x_max y_min y_max z_min z_max" << endl;
+	cout << "        Fuzzy value: <tolerance>                       (optional)" << endl;
+	cout << "        Source file: <in.brep>                         (optional)" << endl;
+	cout << "      Plane adds         Plane origin: x y z" << endl;
+	cout << "                         Plane normal: x y z" << endl;
+	cout << "      ExtendFace adds    Face id: <id>" << endl;
+	cout << "      ExtrudeEdges adds  Edge ids: <id> <id> ..." << endl;
+	cout << "                         Extrusion offset: x y z      (optional)" << endl;
+	cout << "                         Extrusion vector: x y z" << endl;
+	cout << "      The extent is the box the tool has to cover, so that one tool is the" << endl;
+	cout << "      same for every part it is applied to.  Face and edge ids are read from" << endl;
+	cout << "      the source file when one is given, otherwise from the input file." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -569,6 +588,161 @@ bool SplitAFaceUsingTwoPoints(int argc, char* argv[])
 		Ng_OCC_Save_BREP(occ_geom, argv[3]);
 		//
 		cout << "Split face finished successfully." << endl;
+		//
+		return 0;
+	}
+	catch (exception ex)
+	{
+		return 1;
+	}
+}
+// A tool definition file holds one <property>: <values> line per property, in the style of the
+// visualization file.  Unknown properties are ignored so that a property can be added without
+// breaking an older executable, and a missing property keeps its default.
+static string TrimToolText(const string & text)
+{
+	size_t first = text.find_first_not_of(" \t\r\n");
+	if (first == string::npos) return "";
+	size_t last = text.find_last_not_of(" \t\r\n");
+	return text.substr(first, last - first + 1);
+}
+static string ToolKeyFromText(const string & text)
+{
+	string key;
+	for (size_t i = 0; i < text.size(); i++)
+	{
+		if (text[i] == ' ' || text[i] == '\t') continue;
+		key += (char)tolower(text[i]);
+	}
+	return key;
+}
+static void ReadToolValues(const string & text, double * values, int numOfValues)
+{
+	istringstream stream(text);
+	for (int i = 0; i < numOfValues; i++) stream >> values[i];
+}
+bool SplitGeometry(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 5)
+		{
+			cerr << "The BREP_SPLIT command needs an input file, an output file and a tool definition file." << endl;
+			return 1;
+		}
+		// The face count is what says whether the split happened, since the modelling kernel returns
+		// a shape whether or not it made the cut
+		TopTools_IndexedMapOfShape FMap;
+		Ng_OCC_TopTools_IndexedMapOfShape * occ_fmap = (Ng_OCC_TopTools_IndexedMapOfShape*)&FMap;
+		// Initialise the Netgen Core library
+		Ng_Init();
+		// Read in the OCC File
+		cout << "Ng_OCC_Load_BREP" << endl;
+		Ng_OCC_Geometry * occ_geom = Ng_OCC_Load_BREP(argv[2]);
+		if (!occ_geom)
+		{
+			cout << "Error reading in BREP File: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Successfully loaded BREP File: " << argv[2] << endl;
+		//
+		Ng_OCC_GetFMap(occ_geom, occ_fmap);
+		int numOfFacesBefore = FMap.Extent();
+		// Read the tool definition
+		ifstream toolFile(argv[4]);
+		if (!toolFile)
+		{
+			cerr << "Error reading the tool definition file: " << argv[4] << endl;
+			return 1;
+		}
+		//
+		string toolType;
+		string sourceFileName;
+		double fuzzyValue = 0;
+		double extent[6] = { 0, 0, 0, 0, 0, 0 };
+		double origin[3] = { 0, 0, 0 };
+		double normal[3] = { 0, 0, 1 };
+		double extrusionOffset[3] = { 0, 0, 0 };
+		double extrusionVector[3] = { 0, 0, 0 };
+		int faceId = 0;
+		vector<int> edgeIds;
+		//
+		string line;
+		while (getline(toolFile, line))
+		{
+			size_t colon = line.find(':');
+			if (colon == string::npos) continue;
+			string key = ToolKeyFromText(line.substr(0, colon));
+			string value = TrimToolText(line.substr(colon + 1));
+			//
+			if (key == "tooltype") toolType = ToolKeyFromText(value);
+			else if (key == "sourcefile") sourceFileName = value;
+			else if (key == "fuzzyvalue") fuzzyValue = stod(value);
+			else if (key == "extent") ReadToolValues(value, extent, 6);
+			else if (key == "planeorigin") ReadToolValues(value, origin, 3);
+			else if (key == "planenormal") ReadToolValues(value, normal, 3);
+			else if (key == "faceid") faceId = stoi(value);
+			else if (key == "extrusionoffset") ReadToolValues(value, extrusionOffset, 3);
+			else if (key == "extrusionvector") ReadToolValues(value, extrusionVector, 3);
+			else if (key == "edgeids")
+			{
+				istringstream stream(value);
+				int edgeId;
+				while (stream >> edgeId) edgeIds.push_back(edgeId);
+			}
+		}
+		toolFile.close();
+		// The tool geometry may live on another part than the geometry being split
+		Ng_OCC_Geometry * source_geom = NULL;
+		if (sourceFileName.length() > 0)
+		{
+			cout << "Ng_OCC_Load_BREP" << endl;
+			source_geom = Ng_OCC_Load_BREP(sourceFileName.c_str());
+			if (!source_geom)
+			{
+				cout << "Error reading in the source BREP File: " << sourceFileName << endl;
+				return 1;
+			}
+			cout << "Successfully loaded the source BREP File: " << sourceFileName << endl;
+		}
+		//
+		if (toolType == "plane")
+		{
+			cout << "Ng_OCC_SplitWithPlane" << endl;
+			occ_geom = Ng_OCC_SplitWithPlane(occ_geom, origin, normal, extent, fuzzyValue);
+		}
+		else if (toolType == "extendface")
+		{
+			cout << "Ng_OCC_SplitWithExtendedFace" << endl;
+			occ_geom = Ng_OCC_SplitWithExtendedFace(occ_geom, source_geom, faceId, extent, fuzzyValue);
+		}
+		else if (toolType == "extrudeedges")
+		{
+			cout << "Ng_OCC_SplitWithExtrudedEdges" << endl;
+			occ_geom = Ng_OCC_SplitWithExtrudedEdges(occ_geom, source_geom, edgeIds.size() == 0 ? NULL : &edgeIds[0],
+			                                         (int)edgeIds.size(), extrusionOffset, extrusionVector, fuzzyValue);
+		}
+		else
+		{
+			cerr << "The splitting tool type is not supported: " << toolType << endl;
+			return 1;
+		}
+		//
+		FMap.Clear();
+		Ng_OCC_GetFMap(occ_geom, occ_fmap);
+		int numOfFacesAfter = FMap.Extent();
+		//
+		if (numOfFacesAfter <= numOfFacesBefore)
+		{
+			cerr << "The splitting tool did not split the geometry." << endl;
+			return 1;
+		}
+		// Save
+		cout << "Ng_OCC_Save_BREP" << endl;
+		Ng_OCC_Save_BREP(occ_geom, argv[3]);
+		//
+		cout << "Split geometry finished successfully: " << numOfFacesAfter - numOfFacesBefore
+		     << " faces were added." << endl;
 		//
 		return 0;
 	}
