@@ -1340,8 +1340,11 @@ namespace netgen
 		return true;
 	}
 	// A compound is cut solid by solid so that the solids the caller did not name come through untouched,
-	// and everything is gathered back into one compound. The faces the solids already share are carried
-	// with them, which is what keeps the assembly conformal across the cut.
+	// and everything is gathered back into one compound. Cutting a solid on its own rebuilds the faces of
+	// that solid, so a face it shared with a solid the caller did not name comes back twice - once rebuilt
+	// and once as it was - wherever the tool reaches that face, and the two sides no longer meet on one
+	// face. The pieces are therefore put back through a general fuse at the end, which imprints them on
+	// each other again.
 	static OCCGeometry * SplitSolidsWithTool(OCCGeometry * occgeom, const TopoDS_Shape & tool, double fuzzyValue,
 	                                        int * solidIds, int numOfSolidIds)
 	{
@@ -1380,8 +1383,20 @@ namespace netgen
 			PrintMessage(1, "None of the named solids was split.");
 			return occgeom;
 		}
+		// The pieces are imprinted on each other again, so that a face shared with a solid that was not
+		// cut is one face and not two coincident ones. A cut that reached no shared face is left as it is
+		TopoDS_Shape joined = result;
+		BOPAlgo_Builder aBuilder;
+		aBuilder.SetRunParallel(Standard_True);
+		for (TopExp_Explorer exp2(result, TopAbs_SOLID); exp2.More(); exp2.Next())
+			aBuilder.AddArgument(exp2.Current());
+		aBuilder.Perform();
+		if (aBuilder.HasErrors())
+			PrintMessage(1, "The pieces of the split could not be imprinted on each other. The parts that "
+			                "were cut may not share their faces with the parts that were not.");
+		else joined = aBuilder.Shape();
 		//
-		occgeom->shape = result;
+		occgeom->shape = joined;
 		occgeom->changed = 1;
 		occgeom->BuildFMap();
 		//
