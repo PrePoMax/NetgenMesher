@@ -1318,13 +1318,86 @@ namespace netgen
 	}
 	// The general fuse would keep the fragments of the tool itself in the result, so a splitting
 	// operation uses the splitter, which splits the arguments and drops what is left of the tools
-	static OCCGeometry * SplitWithTool(OCCGeometry * occgeom, const TopoDS_Shape & tool, double fuzzyValue)
+	static bool SplitOneShapeWithTool(const TopoDS_Shape & shape, const TopoDS_Shape & tool, double fuzzyValue,
+	                                  TopoDS_Shape & result)
+	{
+		TopTools_ListOfShape arguments;
+		TopTools_ListOfShape tools;
+		arguments.Append(shape);
+		tools.Append(tool);
+		//
+		BRepAlgoAPI_Splitter splitter;
+		splitter.SetArguments(arguments);
+		splitter.SetTools(tools);
+		splitter.SetRunParallel(Standard_True);
+		splitter.SetNonDestructive(Standard_True);
+		if (fuzzyValue > 0) splitter.SetFuzzyValue(fuzzyValue);
+		splitter.Build();
+		//
+		if (splitter.HasErrors()) return false;
+		//
+		result = splitter.Shape();
+		return true;
+	}
+	// A compound is cut solid by solid so that the solids the caller did not name come through untouched,
+	// and everything is gathered back into one compound. The faces the solids already share are carried
+	// with them, which is what keeps the assembly conformal across the cut.
+	static OCCGeometry * SplitSolidsWithTool(OCCGeometry * occgeom, const TopoDS_Shape & tool, double fuzzyValue,
+	                                        int * solidIds, int numOfSolidIds)
+	{
+		BRep_Builder builder;
+		TopoDS_Compound result;
+		builder.MakeCompound(result);
+		//
+		int solidNumber = 0;
+		int numOfSplitSolids = 0;
+		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SOLID); exp0.More(); exp0.Next())
+		{
+			solidNumber++;
+			//
+			bool split = false;
+			for (int i = 0; i < numOfSolidIds; i++) if (solidIds[i] == solidNumber) { split = true; break; }
+			//
+			TopoDS_Shape piece = exp0.Current();
+			if (split)
+			{
+				TopoDS_Shape cut;
+				if (SplitOneShapeWithTool(piece, tool, fuzzyValue, cut)) { piece = cut; numOfSplitSolids++; }
+				else PrintMessage(1, "The split command failed on one of the solids.");
+			}
+			// The splitter answers with a compound of the pieces, which is flattened so that the result
+			// holds solids and not compounds inside a compound
+			bool added = false;
+			for (TopExp_Explorer exp1(piece, TopAbs_SOLID); exp1.More(); exp1.Next())
+			{
+				builder.Add(result, exp1.Current());
+				added = true;
+			}
+			if (!added) builder.Add(result, piece);
+		}
+		if (solidNumber == 0 || numOfSplitSolids == 0)
+		{
+			PrintMessage(1, "None of the named solids was split.");
+			return occgeom;
+		}
+		//
+		occgeom->shape = result;
+		occgeom->changed = 1;
+		occgeom->BuildFMap();
+		//
+		return occgeom;
+	}
+	static OCCGeometry * SplitWithTool(OCCGeometry * occgeom, const TopoDS_Shape & tool, double fuzzyValue,
+	                                   int * solidIds, int numOfSolidIds)
 	{
 		if (tool.IsNull())
 		{
 			PrintMessage(1, "The splitting tool could not be created.");
 			return occgeom;
 		}
+		// Only some of the solids are cut when the caller names them
+		if (solidIds != NULL && numOfSolidIds > 0)
+			return SplitSolidsWithTool(occgeom, tool, fuzzyValue, solidIds, numOfSolidIds);
 		//
 		TopTools_ListOfShape arguments;
 		TopTools_ListOfShape tools;
@@ -1352,7 +1425,7 @@ namespace netgen
 		return occgeom;
 	}
 	OCCGeometry * SplitWithPlane(OCCGeometry * occgeom, double * origin, double * normal, double * extent,
-	                             double fuzzyValue)
+	                             double fuzzyValue, int * solidIds, int numOfSolidIds)
 	{
 		gp_Vec direction(normal[0], normal[1], normal[2]);
 		if (direction.Magnitude() <= Precision::Confusion())
@@ -1364,10 +1437,12 @@ namespace netgen
 		gp_Pln plane(gp_Pnt(origin[0], origin[1], origin[2]), gp_Dir(direction));
 		Handle(Geom_Plane) surface = new Geom_Plane(plane);
 		//
-		return SplitWithTool(occgeom, MakeToolFaceFromSurface(surface, extent), fuzzyValue);
+		return SplitWithTool(occgeom, MakeToolFaceFromSurface(surface, extent), fuzzyValue, solidIds,
+		                     numOfSolidIds);
 	}
 	OCCGeometry * SplitWithExtendedFace(OCCGeometry * occgeom, OCCGeometry * sourcegeom, int faceId,
-	                                    double * extent, double fuzzyValue)
+	                                    double * extent, double fuzzyValue, int * solidIds,
+	                                    int numOfSolidIds)
 	{
 		if (sourcegeom == NULL) sourcegeom = occgeom;
 		//
@@ -1385,13 +1460,17 @@ namespace netgen
 			return occgeom;
 		}
 		//
-		return SplitWithTool(occgeom, MakeToolFaceFromSurface(surface, extent), fuzzyValue);
+		return SplitWithTool(occgeom, MakeToolFaceFromSurface(surface, extent), fuzzyValue, solidIds,
+		                     numOfSolidIds);
 	}
-	OCCGeometry * SplitWithExtrudedEdges(OCCGeometry * occgeom, OCCGeometry * sourcegeom, int * edgeIds,
-	                                     int numOfEdgeIds, double * offset, double * vector, double fuzzyValue)
+	// The edges may come from more than one shape, because a compound is split as a whole while the
+	// edges are picked on its pieces, and an edge id means nothing outside the shape it was read from.
+	// So the ids arrive grouped: edgeIdCounts[i] of them belong to sourcegeoms[i].
+	OCCGeometry * SplitWithExtrudedEdges(OCCGeometry * occgeom, OCCGeometry ** sourcegeoms,
+	                                     int * edgeIdCounts, int numOfSources, int * edgeIds,
+	                                     double * offset, double * vector, double fuzzyValue,
+	                                     int * solidIds, int numOfSolidIds)
 	{
-		if (sourcegeom == NULL) sourcegeom = occgeom;
-		//
 		gp_Vec extrusion(vector[0], vector[1], vector[2]);
 		if (extrusion.Magnitude() <= Precision::Confusion())
 		{
@@ -1404,11 +1483,17 @@ namespace netgen
 		builder.MakeCompound(profile);
 		//
 		int numOfEdges = 0;
-		for (int i = 0; i < numOfEdgeIds; i++)
+		int index = 0;
+		for (int source = 0; source < numOfSources; source++)
 		{
-			if (edgeIds[i] < 1 || edgeIds[i] > sourcegeom->emap.Extent()) continue;
-			builder.Add(profile, sourcegeom->emap(edgeIds[i]));
-			numOfEdges++;
+			OCCGeometry * sourcegeom = sourcegeoms == NULL || sourcegeoms[source] == NULL ?
+			                           occgeom : sourcegeoms[source];
+			for (int i = 0; i < edgeIdCounts[source]; i++, index++)
+			{
+				if (edgeIds[index] < 1 || edgeIds[index] > sourcegeom->emap.Extent()) continue;
+				builder.Add(profile, sourcegeom->emap(edgeIds[index]));
+				numOfEdges++;
+			}
 		}
 		if (numOfEdges == 0)
 		{
@@ -1431,7 +1516,7 @@ namespace netgen
 			return occgeom;
 		}
 		//
-		return SplitWithTool(occgeom, prismMaker.Shape(), fuzzyValue);
+		return SplitWithTool(occgeom, prismMaker.Shape(), fuzzyValue, solidIds, numOfSolidIds);
 	}
 	OCCGeometry * ScaleGeometry(OCCGeometry * occgeom, double Tx, double Ty, double Tz, double sx, double sy, double sz)
 	{

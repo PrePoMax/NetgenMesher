@@ -54,6 +54,7 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepLib.hxx>
 #include <Precision.hxx>
+#include <gp_Lin.hxx>
 #include <typeinfo>
 #include <map>
 
@@ -1230,7 +1231,44 @@ namespace nglib
 					Property("focal_length", parabola.Focal());
 					break;
 				}
+				default:
+					WriteStraightCurveAxis(curve);
+					break;
 			}
+		}
+		// A curve that was drawn straight and arrives as a spline - which is what a STEP file and a
+		// boolean operation both leave behind - still runs in one direction, and a reader asking for
+		// the direction of an edge means that direction whatever curve carries it. So a non analytic
+		// curve that stays on the line through its ends reports that line as its axis. The type stays
+		// what the curve really is: the axis says the curve is straight, not that it is a line.
+		void WriteStraightCurveAxis(const BRepAdaptor_Curve& curve)
+		{
+			double first = curve.FirstParameter();
+			double last = curve.LastParameter();
+			if (last <= first) return;
+			//
+			gp_Pnt start = curve.Value(first);
+			gp_Pnt end = curve.Value(last);
+			double chord = start.Distance(end);
+			if (chord <= Precision::Confusion()) return;
+			//
+			gp_Dir direction(gp_Vec(start, end));
+			gp_Lin line(start, direction);
+			// The ends of a curve lie on the line through them whatever the curve does between them, so
+			// the curve is sampled over its whole parameter range and every sample has to sit on it too
+			double tolerance = chord * 1.0e-6;
+			if (tolerance < Precision::Confusion()) tolerance = Precision::Confusion();
+			const int numOfSamples = 32;
+			for (int i = 1; i < numOfSamples; i++)
+			{
+				gp_Pnt point = curve.Value(first + (last - first) * i / numOfSamples);
+				if (line.Distance(point) > tolerance) return;
+			}
+			// A curve that runs out along the line and back again sits on the line at every sample, so
+			// the length it covers has to be the length of the chord as well
+			if (GCPnts_AbscissaPoint::Length(curve) - chord > tolerance) return;
+			//
+			AxisProperty(gp_Ax1(start, direction));
 		}
 		void WriteEdge(int id, const TopoDS_Edge& edge)
 		{
@@ -2448,12 +2486,13 @@ namespace nglib
 	}
 
 	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithPlane(Ng_OCC_Geometry * geom, double * origin, double * normal,
-	                                                   double * extent, double fuzzyValue)
+	                                                   double * extent, double fuzzyValue, int * solidIds,
+	                                                   int numOfSolidIds)
 	{
 		try
 		{
 			OCCGeometry * occgeom = (OCCGeometry*)geom;
-			occgeom = SplitWithPlane(occgeom, origin, normal, extent, fuzzyValue);
+			occgeom = SplitWithPlane(occgeom, origin, normal, extent, fuzzyValue, solidIds, numOfSolidIds);
 			return ((Ng_OCC_Geometry *)occgeom);
 		}
 		catch (exception ex)
@@ -2464,13 +2503,15 @@ namespace nglib
 	}
 
 	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom, Ng_OCC_Geometry * sourceGeom,
-	                                                          int faceId, double * extent, double fuzzyValue)
+	                                                          int faceId, double * extent, double fuzzyValue,
+	                                                          int * solidIds, int numOfSolidIds)
 	{
 		try
 		{
 			OCCGeometry * occgeom = (OCCGeometry*)geom;
 			OCCGeometry * sourceoccgeom = (OCCGeometry*)sourceGeom;
-			occgeom = SplitWithExtendedFace(occgeom, sourceoccgeom, faceId, extent, fuzzyValue);
+			occgeom = SplitWithExtendedFace(occgeom, sourceoccgeom, faceId, extent, fuzzyValue, solidIds,
+			                               numOfSolidIds);
 			return ((Ng_OCC_Geometry *)occgeom);
 		}
 		catch (exception ex)
@@ -2480,15 +2521,18 @@ namespace nglib
 		return geom;
 	}
 
-	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtrudedEdges(Ng_OCC_Geometry * geom, Ng_OCC_Geometry * sourceGeom,
-	                                                           int * edgeIds, int numOfEdgeIds, double * offset,
-	                                                           double * vector, double fuzzyValue)
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtrudedEdges(Ng_OCC_Geometry * geom,
+	                                                           Ng_OCC_Geometry ** sourceGeoms, int * edgeIdCounts,
+	                                                           int numOfSources, int * edgeIds, double * offset,
+	                                                           double * vector, double fuzzyValue, int * solidIds,
+	                                                           int numOfSolidIds)
 	{
 		try
 		{
 			OCCGeometry * occgeom = (OCCGeometry*)geom;
-			OCCGeometry * sourceoccgeom = (OCCGeometry*)sourceGeom;
-			occgeom = SplitWithExtrudedEdges(occgeom, sourceoccgeom, edgeIds, numOfEdgeIds, offset, vector, fuzzyValue);
+			OCCGeometry ** sourceoccgeoms = (OCCGeometry**)sourceGeoms;
+			occgeom = SplitWithExtrudedEdges(occgeom, sourceoccgeoms, edgeIdCounts, numOfSources, edgeIds,
+			                                offset, vector, fuzzyValue, solidIds, numOfSolidIds);
 			return ((Ng_OCC_Geometry *)occgeom);
 		}
 		catch (exception ex)

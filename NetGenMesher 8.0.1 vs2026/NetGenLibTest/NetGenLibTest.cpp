@@ -239,7 +239,12 @@ void PrintUsage(const char* exePath)
 	cout << "        Tool type: Plane | ExtendFace | ExtrudeEdges" << endl;
 	cout << "        Extent: x_min x_max y_min y_max z_min z_max" << endl;
 	cout << "        Fuzzy value: <tolerance>                       (optional)" << endl;
-	cout << "        Source file: <in.brep>                         (optional)" << endl;
+	cout << "        Solid ids: <id> <id> ...                       (optional)" << endl;
+	cout << "          cuts only those solids of the shape and gathers every solid," << endl;
+	cout << "          cut or not, back into one compound" << endl;
+	cout << "        Source file: <in.brep>                         (optional, repeatable)" << endl;
+	cout << "          the edge ids that follow it are read from that file; ids given" << endl;
+	cout << "          before any source file are read from the shape being split" << endl;
 	cout << "      Plane adds         Plane origin: x y z" << endl;
 	cout << "                         Plane normal: x y z" << endl;
 	cout << "      ExtendFace adds    Face id: <id>" << endl;
@@ -657,7 +662,8 @@ bool SplitGeometry(int argc, char* argv[])
 		}
 		//
 		string toolType;
-		string sourceFileName;
+		vector<string> sourceFileNames;
+		vector<int> edgeIdCounts;
 		double fuzzyValue = 0;
 		double extent[6] = { 0, 0, 0, 0, 0, 0 };
 		double origin[3] = { 0, 0, 0 };
@@ -666,6 +672,7 @@ bool SplitGeometry(int argc, char* argv[])
 		double extrusionVector[3] = { 0, 0, 0 };
 		int faceId = 0;
 		vector<int> edgeIds;
+		vector<int> solidIds;
 		//
 		string line;
 		while (getline(toolFile, line))
@@ -676,7 +683,12 @@ bool SplitGeometry(int argc, char* argv[])
 			string value = TrimToolText(line.substr(colon + 1));
 			//
 			if (key == "tooltype") toolType = ToolKeyFromText(value);
-			else if (key == "sourcefile") sourceFileName = value;
+			// Each source file opens a group; the edge ids that follow it are read from that file
+			else if (key == "sourcefile")
+			{
+				sourceFileNames.push_back(value);
+				edgeIdCounts.push_back(0);
+			}
 			else if (key == "fuzzyvalue") fuzzyValue = stod(value);
 			else if (key == "extent") ReadToolValues(value, extent, 6);
 			else if (key == "planeorigin") ReadToolValues(value, origin, 3);
@@ -688,39 +700,63 @@ bool SplitGeometry(int argc, char* argv[])
 			{
 				istringstream stream(value);
 				int edgeId;
-				while (stream >> edgeId) edgeIds.push_back(edgeId);
+				int numOfIds = 0;
+				while (stream >> edgeId) { edgeIds.push_back(edgeId); numOfIds++; }
+				// Ids given before any source file are read from the shape being split
+				if (edgeIdCounts.size() == 0) edgeIdCounts.push_back(numOfIds);
+				else edgeIdCounts[edgeIdCounts.size() - 1] += numOfIds;
+			}
+			else if (key == "solidids")
+			{
+				istringstream stream(value);
+				int solidId;
+				while (stream >> solidId) solidIds.push_back(solidId);
 			}
 		}
 		toolFile.close();
-		// The tool geometry may live on another part than the geometry being split
-		Ng_OCC_Geometry * source_geom = NULL;
-		if (sourceFileName.length() > 0)
+		// The tool geometry may live on other parts than the geometry being split, and on more than
+		// one of them, because a compound is split as a whole while its pieces carry the picked edges
+		vector<Ng_OCC_Geometry *> source_geoms;
+		for (size_t i = 0; i < sourceFileNames.size(); i++)
 		{
 			cout << "Ng_OCC_Load_BREP" << endl;
-			source_geom = Ng_OCC_Load_BREP(sourceFileName.c_str());
+			Ng_OCC_Geometry * source_geom = Ng_OCC_Load_BREP(sourceFileNames[i].c_str());
 			if (!source_geom)
 			{
-				cout << "Error reading in the source BREP File: " << sourceFileName << endl;
+				cout << "Error reading in the source BREP File: " << sourceFileNames[i] << endl;
 				return 1;
 			}
-			cout << "Successfully loaded the source BREP File: " << sourceFileName << endl;
+			cout << "Successfully loaded the source BREP File: " << sourceFileNames[i] << endl;
+			source_geoms.push_back(source_geom);
 		}
+		//
+		int * solidIdsData = solidIds.size() == 0 ? NULL : &solidIds[0];
+		int numOfSolidIds = (int)solidIds.size();
 		//
 		if (toolType == "plane")
 		{
 			cout << "Ng_OCC_SplitWithPlane" << endl;
-			occ_geom = Ng_OCC_SplitWithPlane(occ_geom, origin, normal, extent, fuzzyValue);
+			occ_geom = Ng_OCC_SplitWithPlane(occ_geom, origin, normal, extent, fuzzyValue, solidIdsData,
+			                                 numOfSolidIds);
 		}
 		else if (toolType == "extendface")
 		{
 			cout << "Ng_OCC_SplitWithExtendedFace" << endl;
-			occ_geom = Ng_OCC_SplitWithExtendedFace(occ_geom, source_geom, faceId, extent, fuzzyValue);
+			occ_geom = Ng_OCC_SplitWithExtendedFace(occ_geom,
+			                                        source_geoms.size() == 0 ? NULL : source_geoms[0],
+			                                        faceId, extent, fuzzyValue, solidIdsData,
+			                                        numOfSolidIds);
 		}
 		else if (toolType == "extrudeedges")
 		{
 			cout << "Ng_OCC_SplitWithExtrudedEdges" << endl;
-			occ_geom = Ng_OCC_SplitWithExtrudedEdges(occ_geom, source_geom, edgeIds.size() == 0 ? NULL : &edgeIds[0],
-			                                         (int)edgeIds.size(), extrusionOffset, extrusionVector, fuzzyValue);
+			occ_geom = Ng_OCC_SplitWithExtrudedEdges(occ_geom,
+			                                         source_geoms.size() == 0 ? NULL : &source_geoms[0],
+			                                         edgeIdCounts.size() == 0 ? NULL : &edgeIdCounts[0],
+			                                         (int)edgeIdCounts.size(),
+			                                         edgeIds.size() == 0 ? NULL : &edgeIds[0],
+			                                         extrusionOffset, extrusionVector, fuzzyValue,
+			                                         solidIdsData, numOfSolidIds);
 		}
 		else
 		{

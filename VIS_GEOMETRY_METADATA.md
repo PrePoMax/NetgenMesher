@@ -103,6 +103,12 @@ Every edge that is not degenerated provides `midpoint`, the point half way along
 Circular edges provide `closed` (`1` for a complete circle, otherwise `0`) and `sweep_angle_rad`. The sweep is the
 absolute OpenCASCADE curve-parameter span, so a semicircle reports pi and a complete circle reports 2 pi.
 
+An edge whose curve is not analytic - a `BSplineCurve` or a `BezierCurve`, which is what a STEP file and a boolean
+operation both leave behind for a line - provides `axis` as well when the curve stays on the line through its ends
+within a relative tolerance of 1e-6. The `type` is unchanged: the axis says the edge is straight, not that a line
+represents it. A reader that wants the direction an edge runs in reads `axis` and does not have to care which
+curve carries it.
+
 A cylindrical face belonging unambiguously to one solid provides `convexity`. `Convex` means the material is toward
 the cylinder axis, as on a pin. `Concave` means the material is away from the axis, as in a cylindrical hole. The
 property is omitted for shells, shared faces, or cases where the material side cannot be classified reliably.
