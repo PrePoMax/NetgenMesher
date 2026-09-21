@@ -2485,14 +2485,32 @@ namespace nglib
 		}
 	}
 
-	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithPlane(Ng_OCC_Geometry * geom, double * origin, double * normal,
-	                                                   double * extent, double fuzzyValue, int * solidIds,
-	                                                   int numOfSolidIds)
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_RemoveSolids(Ng_OCC_Geometry * geom, int * solidIds, int numOfSolidIds)
 	{
 		try
 		{
 			OCCGeometry * occgeom = (OCCGeometry*)geom;
-			occgeom = SplitWithPlane(occgeom, origin, normal, extent, fuzzyValue, solidIds, numOfSolidIds);
+			occgeom = RemoveSolids(occgeom, solidIds, numOfSolidIds);
+			return ((Ng_OCC_Geometry *)occgeom);
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_RemoveSolids.");
+		}
+		return geom;
+	}
+
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithPlane(Ng_OCC_Geometry * geom, double * origin, double * normal,
+	                                                   double * extent, double fuzzyValue, int * solidIds,
+	                                                   int numOfSolidIds, int * targetSolids,
+	                                                   int * targetFaceCounts, int numOfTargetGroups,
+	                                                   int * targetFaceIds)
+	{
+		try
+		{
+			OCCGeometry * occgeom = (OCCGeometry*)geom;
+			occgeom = SplitWithPlane(occgeom, origin, normal, extent, fuzzyValue, solidIds, numOfSolidIds,
+			                         targetSolids, targetFaceCounts, numOfTargetGroups, targetFaceIds);
 			return ((Ng_OCC_Geometry *)occgeom);
 		}
 		catch (exception ex)
@@ -2502,16 +2520,21 @@ namespace nglib
 		return geom;
 	}
 
-	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom, Ng_OCC_Geometry * sourceGeom,
-	                                                          int faceId, double * extent, double fuzzyValue,
-	                                                          int * solidIds, int numOfSolidIds)
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom,
+	                                                          Ng_OCC_Geometry ** sourceGeoms, int * faceIdCounts,
+	                                                          int numOfSources, int * faceIds, double * extent,
+	                                                          double fuzzyValue, int * solidIds,
+	                                                          int numOfSolidIds, int * targetSolids,
+	                                                          int * targetFaceCounts, int numOfTargetGroups,
+	                                                          int * targetFaceIds)
 	{
 		try
 		{
 			OCCGeometry * occgeom = (OCCGeometry*)geom;
-			OCCGeometry * sourceoccgeom = (OCCGeometry*)sourceGeom;
-			occgeom = SplitWithExtendedFace(occgeom, sourceoccgeom, faceId, extent, fuzzyValue, solidIds,
-			                               numOfSolidIds);
+			OCCGeometry ** sourceoccgeoms = (OCCGeometry**)sourceGeoms;
+			occgeom = SplitWithExtendedFace(occgeom, sourceoccgeoms, faceIdCounts, numOfSources, faceIds,
+			                               extent, fuzzyValue, solidIds, numOfSolidIds, targetSolids,
+			                               targetFaceCounts, numOfTargetGroups, targetFaceIds);
 			return ((Ng_OCC_Geometry *)occgeom);
 		}
 		catch (exception ex)
@@ -2525,19 +2548,41 @@ namespace nglib
 	                                                           Ng_OCC_Geometry ** sourceGeoms, int * edgeIdCounts,
 	                                                           int numOfSources, int * edgeIds, double * offset,
 	                                                           double * vector, double fuzzyValue, int * solidIds,
-	                                                           int numOfSolidIds)
+	                                                           int numOfSolidIds, int * targetSolids,
+	                                                           int * targetFaceCounts, int numOfTargetGroups,
+	                                                           int * targetFaceIds)
 	{
 		try
 		{
 			OCCGeometry * occgeom = (OCCGeometry*)geom;
 			OCCGeometry ** sourceoccgeoms = (OCCGeometry**)sourceGeoms;
 			occgeom = SplitWithExtrudedEdges(occgeom, sourceoccgeoms, edgeIdCounts, numOfSources, edgeIds,
-			                                offset, vector, fuzzyValue, solidIds, numOfSolidIds);
+			                                offset, vector, fuzzyValue, solidIds, numOfSolidIds, targetSolids,
+			                                targetFaceCounts, numOfTargetGroups, targetFaceIds);
 			return ((Ng_OCC_Geometry *)occgeom);
 		}
 		catch (exception ex)
 		{
 			PrintMessage(1, "An error occurred in Ng_OCC_SplitWithExtrudedEdges.");
+		}
+		return geom;
+	}
+
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithSurfaceLine(Ng_OCC_Geometry * geom, double * firstPoint,
+	                                                         double * secondPoint, double fuzzyValue,
+	                                                         int * targetSolids, int * targetFaceCounts,
+	                                                         int numOfTargetGroups, int * targetFaceIds)
+	{
+		try
+		{
+			OCCGeometry * occgeom = (OCCGeometry*)geom;
+			occgeom = SplitWithSurfaceLine(occgeom, firstPoint, secondPoint, fuzzyValue, targetSolids,
+			                               targetFaceCounts, numOfTargetGroups, targetFaceIds);
+			return ((Ng_OCC_Geometry *)occgeom);
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_SplitWithSurfaceLine.");
 		}
 		return geom;
 	}

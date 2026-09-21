@@ -35,6 +35,10 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <Geom_Plane.hxx>
 #include <TopTools_ListOfShape.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <Geom2d_Line.hxx>
+#include <BRepTools.hxx>
+#include <TopExp.hxx>
 #include <Precision.hxx>
 
 
@@ -1402,13 +1406,156 @@ namespace netgen
 		//
 		return occgeom;
 	}
+	// The imprint answers with the body and the curves that were imprinted on it side by side. The
+	// curves are already in the faces they divided, so what is kept is the bodies alone - a single one
+	// as itself, several gathered into a compound, which is the shape the geometry had to begin with.
+	static TopoDS_Shape KeepSplitBodies(const TopoDS_Shape & shape)
+	{
+		TopTools_ListOfShape bodies;
+		for (TopExp_Explorer exp0(shape, TopAbs_SOLID); exp0.More(); exp0.Next())
+			bodies.Append(exp0.Current());
+		for (TopExp_Explorer exp0(shape, TopAbs_SHELL, TopAbs_SOLID); exp0.More(); exp0.Next())
+			bodies.Append(exp0.Current());
+		for (TopExp_Explorer exp0(shape, TopAbs_FACE, TopAbs_SHELL); exp0.More(); exp0.Next())
+			bodies.Append(exp0.Current());
+		//
+		if (bodies.Extent() == 0) return shape;
+		if (bodies.Extent() == 1) return bodies.First();
+		//
+		BRep_Builder builder;
+		TopoDS_Compound result;
+		builder.MakeCompound(result);
+		for (TopTools_ListOfShape::Iterator it(bodies); it.More(); it.Next()) builder.Add(result, it.Value());
+		//
+		return result;
+	}
+	// The faces a shell split divides. A face id says the place of the face in the shape it was picked
+	// on, and for a compound that is one of its solids, so the ids arrive grouped: targetFaceCounts[i] of
+	// them are numbered inside solid targetSolids[i]. A solid of zero numbers them in the shape itself.
+	// The faces of a solid are walked here the way the face map walks them, which is the order the solid
+	// was written out of the compound in, so the numbers mean the same thing on both sides.
+	static bool GetSplitTargetFaces(OCCGeometry * occgeom, int * targetSolids, int * targetFaceCounts,
+	                                int numOfTargetGroups, int * targetFaceIds,
+	                                TopTools_IndexedMapOfShape & targetFaces)
+	{
+		int index = 0;
+		for (int group = 0; group < numOfTargetGroups; group++)
+		{
+			TopTools_IndexedMapOfShape solidFaces;
+			const TopTools_IndexedMapOfShape * groupFaces = &occgeom->fmap;
+			int solidNumber = targetSolids == NULL ? 0 : targetSolids[group];
+			if (solidNumber > 0)
+			{
+				int number = 0;
+				for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SOLID); exp0.More(); exp0.Next())
+				{
+					if (++number != solidNumber) continue;
+					TopExp::MapShapes(exp0.Current(), TopAbs_FACE, solidFaces);
+					break;
+				}
+				groupFaces = &solidFaces;
+			}
+			//
+			for (int i = 0; i < targetFaceCounts[group]; i++, index++)
+			{
+				int faceId = targetFaceIds[index];
+				if (faceId < 1 || faceId > groupFaces->Extent()) continue;
+				targetFaces.Add((*groupFaces)(faceId));
+			}
+		}
+		return targetFaces.Extent() > 0;
+	}
+	// The curves are imprinted on the whole shape rather than on the faces they were found on, so that
+	// a face next to a divided one is rebuilt with the edge that was divided with it. Imprinting the
+	// faces on their own would leave the neighbour holding the edge it had, and the two would no longer
+	// meet. A curve cannot separate a body, so the solid, the shell and the compound come back as they
+	// were, with more faces.
+	static OCCGeometry * ImprintEdgesOnShape(OCCGeometry * occgeom,
+	                                        const TopTools_IndexedMapOfShape & imprintEdges, double fuzzyValue)
+	{
+		BOPAlgo_Builder imprint;
+		imprint.SetRunParallel(Standard_True);
+		if (fuzzyValue > 0) imprint.SetFuzzyValue(fuzzyValue);
+		imprint.AddArgument(occgeom->shape);
+		for (int i = 1; i <= imprintEdges.Extent(); i++) imprint.AddArgument(imprintEdges(i));
+		imprint.Perform();
+		if (imprint.HasErrors())
+		{
+			PrintMessage(1, "The selected surfaces could not be split.");
+			return occgeom;
+		}
+		//
+		occgeom->shape = KeepSplitBodies(imprint.Shape());
+		occgeom->changed = 1;
+		occgeom->BuildFMap();
+		//
+		return occgeom;
+	}
+	// A shell split divides the faces it is given without cutting the body they belong to. The tool
+	// cannot do that itself - handed to the splitter, a tool face separates a solid in two - so it is
+	// only used to find where it crosses the picked faces, and those curves, not the tool, are what is
+	// imprinted. A curve cannot separate a solid, so the solid, the shell and the compound above the
+	// faces come back as they were, with more faces.
+	static OCCGeometry * SplitFacesWithTool(OCCGeometry * occgeom, const TopoDS_Shape & tool, double fuzzyValue,
+	                                        const TopTools_IndexedMapOfShape & targetFaces)
+	{
+		// Both shapes are arguments of a general fuse rather than argument and tool, so that the picked
+		// faces come back divided whether the tool crosses them or lies in them. It can lie in them: an
+		// edge swept along the plane of the face it was picked on gives a tool face in that same plane.
+		BOPAlgo_Builder crossing;
+		crossing.SetRunParallel(Standard_True);
+		if (fuzzyValue > 0) crossing.SetFuzzyValue(fuzzyValue);
+		for (int i = 1; i <= targetFaces.Extent(); i++) crossing.AddArgument(targetFaces(i));
+		crossing.AddArgument(tool);
+		crossing.Perform();
+		if (crossing.HasErrors())
+		{
+			PrintMessage(1, "The splitting tool could not be crossed with the selected surfaces.");
+			return occgeom;
+		}
+		// What the shape already has stays as it is; only what the crossing added is imprinted
+		TopTools_IndexedMapOfShape oldEdges;
+		TopExp::MapShapes(occgeom->shape, TopAbs_EDGE, oldEdges);
+		//
+		TopTools_IndexedMapOfShape imprintEdges;
+		for (int i = 1; i <= targetFaces.Extent(); i++)
+		{
+			const TopTools_ListOfShape & pieces = crossing.Modified(targetFaces(i));
+			for (TopTools_ListOfShape::Iterator it(pieces); it.More(); it.Next())
+			{
+				for (TopExp_Explorer exp0(it.Value(), TopAbs_EDGE); exp0.More(); exp0.Next())
+				{
+					if (oldEdges.FindIndex(exp0.Current()) < 1) imprintEdges.Add(exp0.Current());
+				}
+			}
+		}
+		if (imprintEdges.Extent() == 0)
+		{
+			PrintMessage(1, "The splitting tool does not cross any of the selected surfaces.");
+			return occgeom;
+		}
+		return ImprintEdgesOnShape(occgeom, imprintEdges, fuzzyValue);
+	}
 	static OCCGeometry * SplitWithTool(OCCGeometry * occgeom, const TopoDS_Shape & tool, double fuzzyValue,
-	                                   int * solidIds, int numOfSolidIds)
+	                                   int * solidIds, int numOfSolidIds, int * targetSolids,
+	                                   int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds)
 	{
 		if (tool.IsNull())
 		{
 			PrintMessage(1, "The splitting tool could not be created.");
 			return occgeom;
+		}
+		// Only the faces the caller names are divided, and the bodies they belong to stay whole
+		if (numOfTargetGroups > 0)
+		{
+			TopTools_IndexedMapOfShape targetFaces;
+			if (!GetSplitTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups,
+			                         targetFaceIds, targetFaces))
+			{
+				PrintMessage(1, "None of the surfaces to split exists.");
+				return occgeom;
+			}
+			return SplitFacesWithTool(occgeom, tool, fuzzyValue, targetFaces);
 		}
 		// Only some of the solids are cut when the caller names them
 		if (solidIds != NULL && numOfSolidIds > 0)
@@ -1439,8 +1586,59 @@ namespace netgen
 		//
 		return occgeom;
 	}
+	// The solids are numbered the way every other command numbers them, by the order the explorer walks
+	// them, so the caller names the same solid here as it does when it says which ones to split. What is
+	// left is gathered into a compound again and the shapes are not touched, so a solid that stays keeps
+	// the faces, edges and vertices it had, imprints on its neighbours included.
+	OCCGeometry * RemoveSolids(OCCGeometry * occgeom, int * solidIds, int numOfSolidIds)
+	{
+		if (solidIds == NULL || numOfSolidIds <= 0)
+		{
+			PrintMessage(1, "No solid to remove was named.");
+			return occgeom;
+		}
+		//
+		BRep_Builder builder;
+		TopoDS_Compound result;
+		builder.MakeCompound(result);
+		//
+		int solidNumber = 0;
+		int numOfRemovedSolids = 0;
+		int numOfKeptSolids = 0;
+		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SOLID); exp0.More(); exp0.Next())
+		{
+			solidNumber++;
+			//
+			bool remove = false;
+			for (int i = 0; i < numOfSolidIds; i++) if (solidIds[i] == solidNumber) { remove = true; break; }
+			//
+			if (remove) numOfRemovedSolids++;
+			else
+			{
+				builder.Add(result, exp0.Current());
+				numOfKeptSolids++;
+			}
+		}
+		if (numOfRemovedSolids == 0)
+		{
+			PrintMessage(1, "None of the named solids exists.");
+			return occgeom;
+		}
+		if (numOfKeptSolids == 0)
+		{
+			PrintMessage(1, "Removing the named solids would leave nothing.");
+			return occgeom;
+		}
+		//
+		occgeom->shape = result;
+		occgeom->changed = 1;
+		occgeom->BuildFMap();
+		//
+		return occgeom;
+	}
 	OCCGeometry * SplitWithPlane(OCCGeometry * occgeom, double * origin, double * normal, double * extent,
-	                             double fuzzyValue, int * solidIds, int numOfSolidIds)
+	                             double fuzzyValue, int * solidIds, int numOfSolidIds, int * targetSolids,
+	                             int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds)
 	{
 		gp_Vec direction(normal[0], normal[1], normal[2]);
 		if (direction.Magnitude() <= Precision::Confusion())
@@ -1453,30 +1651,52 @@ namespace netgen
 		Handle(Geom_Plane) surface = new Geom_Plane(plane);
 		//
 		return SplitWithTool(occgeom, MakeToolFaceFromSurface(surface, extent), fuzzyValue, solidIds,
-		                     numOfSolidIds);
+		                     numOfSolidIds, targetSolids, targetFaceCounts, numOfTargetGroups,
+		                     targetFaceIds);
 	}
-	OCCGeometry * SplitWithExtendedFace(OCCGeometry * occgeom, OCCGeometry * sourcegeom, int faceId,
+	// Several faces may be extended at once, and they may sit on several shapes - a compound is split
+	// as a whole while its pieces are what the faces are picked on - so the ids arrive grouped:
+	// faceIdCounts[i] of them belong to sourcegeoms[i]. Each becomes a tool face of its own and they
+	// cut together, as one compound tool.
+	OCCGeometry * SplitWithExtendedFace(OCCGeometry * occgeom, OCCGeometry ** sourcegeoms,
+	                                    int * faceIdCounts, int numOfSources, int * faceIds,
 	                                    double * extent, double fuzzyValue, int * solidIds,
-	                                    int numOfSolidIds)
+	                                    int numOfSolidIds, int * targetSolids, int * targetFaceCounts,
+	                                    int numOfTargetGroups, int * targetFaceIds)
 	{
-		if (sourcegeom == NULL) sourcegeom = occgeom;
+		BRep_Builder builder;
+		TopoDS_Compound tool;
+		builder.MakeCompound(tool);
 		//
-		if (faceId < 1 || faceId > sourcegeom->fmap.Extent())
+		int numOfToolFaces = 0;
+		int index = 0;
+		for (int source = 0; source < numOfSources; source++)
 		{
-			PrintMessage(1, "The face to extend does not exist.");
+			OCCGeometry * sourcegeom = sourcegeoms == NULL || sourcegeoms[source] == NULL ?
+			                           occgeom : sourcegeoms[source];
+			for (int i = 0; i < faceIdCounts[source]; i++, index++)
+			{
+				if (faceIds[index] < 1 || faceIds[index] > sourcegeom->fmap.Extent()) continue;
+				//
+				TopoDS_Face face = TopoDS::Face(sourcegeom->fmap(faceIds[index]));
+				Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
+				if (surface.IsNull()) continue;
+				//
+				TopoDS_Shape toolFace = MakeToolFaceFromSurface(surface, extent);
+				if (toolFace.IsNull()) continue;
+				//
+				builder.Add(tool, toolFace);
+				numOfToolFaces++;
+			}
+		}
+		if (numOfToolFaces == 0)
+		{
+			PrintMessage(1, "None of the faces to extend could be continued past its boundary.");
 			return occgeom;
 		}
 		//
-		TopoDS_Face face = TopoDS::Face(sourcegeom->fmap(faceId));
-		Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
-		if (surface.IsNull())
-		{
-			PrintMessage(1, "The face to extend carries no surface.");
-			return occgeom;
-		}
-		//
-		return SplitWithTool(occgeom, MakeToolFaceFromSurface(surface, extent), fuzzyValue, solidIds,
-		                     numOfSolidIds);
+		return SplitWithTool(occgeom, tool, fuzzyValue, solidIds, numOfSolidIds, targetSolids,
+		                     targetFaceCounts, numOfTargetGroups, targetFaceIds);
 	}
 	// The edges may come from more than one shape, because a compound is split as a whole while the
 	// edges are picked on its pieces, and an edge id means nothing outside the shape it was read from.
@@ -1484,7 +1704,9 @@ namespace netgen
 	OCCGeometry * SplitWithExtrudedEdges(OCCGeometry * occgeom, OCCGeometry ** sourcegeoms,
 	                                     int * edgeIdCounts, int numOfSources, int * edgeIds,
 	                                     double * offset, double * vector, double fuzzyValue,
-	                                     int * solidIds, int numOfSolidIds)
+	                                     int * solidIds, int numOfSolidIds, int * targetSolids,
+	                                     int * targetFaceCounts, int numOfTargetGroups,
+	                                     int * targetFaceIds)
 	{
 		gp_Vec extrusion(vector[0], vector[1], vector[2]);
 		if (extrusion.Magnitude() <= Precision::Confusion())
@@ -1531,7 +1753,116 @@ namespace netgen
 			return occgeom;
 		}
 		//
-		return SplitWithTool(occgeom, prismMaker.Shape(), fuzzyValue, solidIds, numOfSolidIds);
+		return SplitWithTool(occgeom, prismMaker.Shape(), fuzzyValue, solidIds, numOfSolidIds,
+		                     targetSolids, targetFaceCounts, numOfTargetGroups, targetFaceIds);
+	}
+	// The parameter interval over which a line crosses a box, or false when it misses it. The line of a
+	// two point split is drawn across the parameter box of the face rather than between the two points,
+	// so that it reaches the boundary and actually divides the face; clipping it to the box is what keeps
+	// a periodic surface from being cut a second time where the line comes round again.
+	static bool ClipParameterLineToBox(const gp_Pnt2d & origin, const gp_Dir2d & direction,
+	                                   double uMin, double uMax, double vMin, double vMax,
+	                                   double & first, double & last)
+	{
+		first = -1e100;
+		last = 1e100;
+		double denominators[4] = { -direction.X(), direction.X(), -direction.Y(), direction.Y() };
+		double distances[4] = { origin.X() - uMin, uMax - origin.X(), origin.Y() - vMin, vMax - origin.Y() };
+		for (int i = 0; i < 4; i++)
+		{
+			if (fabs(denominators[i]) < 1e-12)
+			{
+				if (distances[i] < 0) return false;
+				continue;
+			}
+			double parameter = distances[i] / denominators[i];
+			if (denominators[i] < 0) { if (parameter > first) first = parameter; }
+			else { if (parameter < last) last = parameter; }
+		}
+		return last > first;
+	}
+	// The line between two points, drawn in the parameter space of the face they lie on. Nothing is
+	// projected: the points are located on the surface and the line is built from their parameters, so
+	// there is no projection direction that can be undefined - which is what a straight edge projected
+	// onto a cylinder meets when the two points face each other across the axis.
+	static bool MakeSurfaceLineEdge(const TopoDS_Face & face, const gp_Pnt & firstPoint,
+	                                const gp_Pnt & secondPoint, double tolerance, TopoDS_Edge & edge)
+	{
+		Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
+		if (surface.IsNull()) return false;
+		//
+		ShapeAnalysis_Surface analysis(surface);
+		gp_Pnt2d firstUV = analysis.ValueOfUV(firstPoint, Precision::Confusion());
+		gp_Pnt2d secondUV = analysis.ValueOfUV(secondPoint, Precision::Confusion());
+		// A point that is not on this surface would be drawn to the nearest place on it without saying so
+		if (surface->Value(firstUV.X(), firstUV.Y()).Distance(firstPoint) > tolerance) return false;
+		if (surface->Value(secondUV.X(), secondUV.Y()).Distance(secondPoint) > tolerance) return false;
+		// A periodic direction is walked the short way round
+		if (surface->IsUPeriodic())
+		{
+			double period = surface->UPeriod();
+			while (secondUV.X() - firstUV.X() > 0.5 * period) secondUV.SetX(secondUV.X() - period);
+			while (firstUV.X() - secondUV.X() > 0.5 * period) secondUV.SetX(secondUV.X() + period);
+		}
+		if (surface->IsVPeriodic())
+		{
+			double period = surface->VPeriod();
+			while (secondUV.Y() - firstUV.Y() > 0.5 * period) secondUV.SetY(secondUV.Y() - period);
+			while (firstUV.Y() - secondUV.Y() > 0.5 * period) secondUV.SetY(secondUV.Y() + period);
+		}
+		//
+		gp_Vec2d along(firstUV, secondUV);
+		if (along.Magnitude() <= Precision::PConfusion()) return false;
+		//
+		double uMin, uMax, vMin, vMax;
+		BRepTools::UVBounds(face, uMin, uMax, vMin, vMax);
+		double first, last;
+		gp_Dir2d direction(along);
+		if (!ClipParameterLineToBox(firstUV, direction, uMin, uMax, vMin, vMax, first, last)) return false;
+		//
+		Handle(Geom2d_Line) line = new Geom2d_Line(firstUV, direction);
+		BRepBuilderAPI_MakeEdge edgeMaker(line, surface, first, last);
+		if (!edgeMaker.IsDone()) return false;
+		//
+		edge = edgeMaker.Edge();
+		BRepLib::BuildCurves3d(edge);
+		//
+		return true;
+	}
+	// Divides the named faces along the line between two points that lie on them. The line belongs to
+	// the surface, so this tool has no shape of its own and no extent: it goes straight to the imprint.
+	OCCGeometry * SplitWithSurfaceLine(OCCGeometry * occgeom, double * firstPoint, double * secondPoint,
+	                                   double fuzzyValue, int * targetSolids, int * targetFaceCounts,
+	                                   int numOfTargetGroups, int * targetFaceIds)
+	{
+		TopTools_IndexedMapOfShape targetFaces;
+		if (!GetSplitTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups, targetFaceIds,
+	                         targetFaces))
+		{
+			PrintMessage(1, "None of the surfaces to split exists.");
+			return occgeom;
+		}
+		//
+		gp_Pnt first(firstPoint[0], firstPoint[1], firstPoint[2]);
+		gp_Pnt second(secondPoint[0], secondPoint[1], secondPoint[2]);
+		// The points were read from the picked geometry, so they sit on the surface as accurately as that
+		// geometry carries them, and the check is only there to catch a point picked somewhere else
+		double tolerance = max2(1e-3 * first.Distance(second), Precision::Confusion());
+		//
+		TopTools_IndexedMapOfShape imprintEdges;
+		for (int i = 1; i <= targetFaces.Extent(); i++)
+		{
+			TopoDS_Edge edge;
+			if (MakeSurfaceLineEdge(TopoDS::Face(targetFaces(i)), first, second, tolerance, edge))
+				imprintEdges.Add(edge);
+		}
+		if (imprintEdges.Extent() == 0)
+		{
+			PrintMessage(1, "The line between the two points could not be drawn on the selected surfaces.");
+			return occgeom;
+		}
+		//
+		return ImprintEdgesOnShape(occgeom, imprintEdges, fuzzyValue);
 	}
 	OCCGeometry * ScaleGeometry(OCCGeometry * occgeom, double Tx, double Ty, double Tz, double sx, double sy, double sz)
 	{

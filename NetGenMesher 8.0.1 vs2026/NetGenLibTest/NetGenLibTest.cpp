@@ -47,6 +47,7 @@ bool ScaleGeometry(int argc, char* argv[]);
 bool ReverseBrepFaceOrientations(int argc, char* argv[]);
 bool SplitAFaceUsingTwoPoints(int argc, char* argv[]);
 bool SplitGeometry(int argc, char* argv[]);
+bool RemoveSolids(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool ConvertToSolid(int argc, char* argv[]);
 // Stl Mesh
@@ -138,6 +139,7 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_REVERSE_FACES") == 0) return ReverseBrepFaceOrientations(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT_A_FACE_USING_TWO_POINTS") == 0) return SplitAFaceUsingTwoPoints(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT") == 0) return SplitGeometry(argc, argv);
+	else if (strcmp(argv[1], "BREP_REMOVE_SOLIDS") == 0) return RemoveSolids(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
 	// Stl Mesh
@@ -236,7 +238,7 @@ void PrintUsage(const char* exePath)
 	cout << "  BREP_SPLIT                         <in.brep> <out.brep> <toolDefinition>" << endl;
 	cout << "      <toolDefinition> is a text file of <property>: <values> lines that" << endl;
 	cout << "      define the splitting tool.  Every tool accepts" << endl;
-	cout << "        Tool type: Plane | ExtendFace | ExtrudeEdges" << endl;
+	cout << "        Tool type: Plane | ExtendFace | ExtrudeEdges | TwoPointLine" << endl;
 	cout << "        Extent: x_min x_max y_min y_max z_min z_max" << endl;
 	cout << "        Fuzzy value: <tolerance>                       (optional)" << endl;
 	cout << "        Solid ids: <id> <id> ...                       (optional)" << endl;
@@ -245,10 +247,23 @@ void PrintUsage(const char* exePath)
 	cout << "        Source file: <in.brep>                         (optional, repeatable)" << endl;
 	cout << "          the edge ids that follow it are read from that file; ids given" << endl;
 	cout << "          before any source file are read from the shape being split" << endl;
+	cout << "        Split target: Shell                            (optional)" << endl;
+	cout << "          divides the named faces and leaves the body they belong to" << endl;
+	cout << "          whole, instead of cutting through it" << endl;
+	cout << "        Target solid: <n>                              (optional, repeatable)" << endl;
+	cout << "          the target face ids that follow it are numbered inside that" << endl;
+	cout << "          solid of the shape; ids given before any target solid are" << endl;
+	cout << "          numbered in the shape itself" << endl;
+	cout << "        Target face ids: <id> <id> ...                 (with Split target)" << endl;
 	cout << "      Plane adds         Plane origin: x y z" << endl;
 	cout << "                         Plane normal: x y z" << endl;
-	cout << "      ExtendFace adds    Face id: <id>" << endl;
+	cout << "      ExtendFace adds    Face ids: <id> <id> ..." << endl;
 	cout << "      ExtrudeEdges adds  Edge ids: <id> <id> ..." << endl;
+	cout << "      TwoPointLine adds  Point 1: x y z" << endl;
+	cout << "                         Point 2: x y z" << endl;
+	cout << "          draws the line between the two points in the parameter space" << endl;
+	cout << "          of each target surface and divides it along that line; it" << endl;
+	cout << "          needs Split target and cannot cut through a body" << endl;
 	cout << "                         Extrusion offset: x y z      (optional)" << endl;
 	cout << "                         Extrusion vector: x y z" << endl;
 	cout << "      The extent is the box the tool has to cover, so that one tool is the" << endl;
@@ -626,6 +641,72 @@ static void ReadToolValues(const string & text, double * values, int numOfValues
 	istringstream stream(text);
 	for (int i = 0; i < numOfValues; i++) stream >> values[i];
 }
+// The solids that are left keep their shapes, so a part built from one of them keeps every id
+// the geometry gave it and PrePoMax can leave the part it already holds alone
+bool RemoveSolids(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 5)
+		{
+			cerr << "The BREP_REMOVE_SOLIDS command needs an input file, an output file and at least "
+			     << "one solid id." << endl;
+			return 1;
+		}
+		//
+		vector<int> solidIds;
+		for (int i = 4; i < argc; i++)
+		{
+			istringstream stream(argv[i]);
+			int solidId;
+			while (stream >> solidId) solidIds.push_back(solidId);
+		}
+		if (solidIds.size() == 0)
+		{
+			cerr << "No solid id was given." << endl;
+			return 1;
+		}
+		// Initialise the Netgen Core library
+		Ng_Init();
+		// Read in the OCC File
+		cout << "Ng_OCC_Load_BREP" << endl;
+		Ng_OCC_Geometry * occ_geom = Ng_OCC_Load_BREP(argv[2]);
+		if (!occ_geom)
+		{
+			cout << "Error reading in BREP File: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Successfully loaded BREP File: " << argv[2] << endl;
+		//
+		TopTools_IndexedMapOfShape RemovalFMap;
+		Ng_OCC_TopTools_IndexedMapOfShape * occ_removal_fmap = (Ng_OCC_TopTools_IndexedMapOfShape*)&RemovalFMap;
+		Ng_OCC_GetFMap(occ_geom, occ_removal_fmap);
+		int numOfFacesBefore = RemovalFMap.Extent();
+		//
+		cout << "Ng_OCC_RemoveSolids" << endl;
+		occ_geom = Ng_OCC_RemoveSolids(occ_geom, &solidIds[0], (int)solidIds.size());
+		//
+		RemovalFMap.Clear();
+		Ng_OCC_GetFMap(occ_geom, occ_removal_fmap);
+		if (RemovalFMap.Extent() >= numOfFacesBefore)
+		{
+			cerr << "No solid was removed from the geometry." << endl;
+			return 1;
+		}
+		// Save
+		cout << "Ng_OCC_Save_BREP" << endl;
+		Ng_OCC_Save_BREP(occ_geom, argv[3]);
+		//
+		cout << "Remove solids finished successfully: " << numOfFacesBefore - RemovalFMap.Extent()
+		     << " faces were removed with them." << endl;
+	}
+	catch (const std::exception& e)
+	{
+		cerr << "Error: " << e.what() << endl;
+		return 1;
+	}
+	return 0;
+}
 bool SplitGeometry(int argc, char* argv[])
 {
 	try
@@ -670,9 +751,16 @@ bool SplitGeometry(int argc, char* argv[])
 		double normal[3] = { 0, 0, 1 };
 		double extrusionOffset[3] = { 0, 0, 0 };
 		double extrusionVector[3] = { 0, 0, 0 };
-		int faceId = 0;
+		vector<int> faceIds;
+		vector<int> faceIdCounts;
 		vector<int> edgeIds;
 		vector<int> solidIds;
+		string splitTarget;
+		vector<int> targetSolids;
+		vector<int> targetFaceCounts;
+		vector<int> targetFaceIds;
+		double firstPoint[3] = { 0, 0, 0 };
+		double secondPoint[3] = { 0, 0, 0 };
 		//
 		string line;
 		while (getline(toolFile, line))
@@ -688,12 +776,24 @@ bool SplitGeometry(int argc, char* argv[])
 			{
 				sourceFileNames.push_back(value);
 				edgeIdCounts.push_back(0);
+				faceIdCounts.push_back(0);
 			}
 			else if (key == "fuzzyvalue") fuzzyValue = stod(value);
 			else if (key == "extent") ReadToolValues(value, extent, 6);
 			else if (key == "planeorigin") ReadToolValues(value, origin, 3);
 			else if (key == "planenormal") ReadToolValues(value, normal, 3);
-			else if (key == "faceid") faceId = stoi(value);
+			else if (key == "point1") ReadToolValues(value, firstPoint, 3);
+			else if (key == "point2") ReadToolValues(value, secondPoint, 3);
+			else if (key == "faceid" || key == "faceids")
+			{
+				istringstream stream(value);
+				int id;
+				int numOfIds = 0;
+				while (stream >> id) { faceIds.push_back(id); numOfIds++; }
+				// Ids given before any source file are read from the shape being split
+				if (faceIdCounts.size() == 0) faceIdCounts.push_back(numOfIds);
+				else faceIdCounts[faceIdCounts.size() - 1] += numOfIds;
+			}
 			else if (key == "extrusionoffset") ReadToolValues(value, extrusionOffset, 3);
 			else if (key == "extrusionvector") ReadToolValues(value, extrusionVector, 3);
 			else if (key == "edgeids")
@@ -711,6 +811,27 @@ bool SplitGeometry(int argc, char* argv[])
 				istringstream stream(value);
 				int solidId;
 				while (stream >> solidId) solidIds.push_back(solidId);
+			}
+			else if (key == "splittarget") splitTarget = ToolKeyFromText(value);
+			// Each target solid opens a group; the face ids that follow it are numbered inside that solid
+			else if (key == "targetsolid")
+			{
+				targetSolids.push_back(stoi(value));
+				targetFaceCounts.push_back(0);
+			}
+			else if (key == "targetfaceid" || key == "targetfaceids")
+			{
+				istringstream stream(value);
+				int id;
+				int numOfIds = 0;
+				while (stream >> id) { targetFaceIds.push_back(id); numOfIds++; }
+				// Ids given before any target solid are numbered in the shape being split
+				if (targetFaceCounts.size() == 0)
+				{
+					targetSolids.push_back(0);
+					targetFaceCounts.push_back(numOfIds);
+				}
+				else targetFaceCounts[targetFaceCounts.size() - 1] += numOfIds;
 			}
 		}
 		toolFile.close();
@@ -732,20 +853,38 @@ bool SplitGeometry(int argc, char* argv[])
 		//
 		int * solidIdsData = solidIds.size() == 0 ? NULL : &solidIds[0];
 		int numOfSolidIds = (int)solidIds.size();
+		// A shell split divides the faces it is given and leaves the body they belong to whole, so
+		// it has to be told which faces those are. Without the target the tool cuts through, as before.
+		bool splitShell = splitTarget == "shell";
+		if (splitShell && targetFaceCounts.size() == 0)
+		{
+			cerr << "A shell split needs the ids of the surfaces to split." << endl;
+			return 1;
+		}
+		int * targetSolidsData = !splitShell || targetSolids.size() == 0 ? NULL : &targetSolids[0];
+		int * targetFaceCountsData = !splitShell || targetFaceCounts.size() == 0 ?
+		                             NULL : &targetFaceCounts[0];
+		int * targetFaceIdsData = !splitShell || targetFaceIds.size() == 0 ? NULL : &targetFaceIds[0];
+		int numOfTargetGroups = splitShell ? (int)targetFaceCounts.size() : 0;
 		//
 		if (toolType == "plane")
 		{
 			cout << "Ng_OCC_SplitWithPlane" << endl;
 			occ_geom = Ng_OCC_SplitWithPlane(occ_geom, origin, normal, extent, fuzzyValue, solidIdsData,
-			                                 numOfSolidIds);
+			                                 numOfSolidIds, targetSolidsData, targetFaceCountsData,
+			                                 numOfTargetGroups, targetFaceIdsData);
 		}
 		else if (toolType == "extendface")
 		{
 			cout << "Ng_OCC_SplitWithExtendedFace" << endl;
 			occ_geom = Ng_OCC_SplitWithExtendedFace(occ_geom,
-			                                        source_geoms.size() == 0 ? NULL : source_geoms[0],
-			                                        faceId, extent, fuzzyValue, solidIdsData,
-			                                        numOfSolidIds);
+			                                        source_geoms.size() == 0 ? NULL : &source_geoms[0],
+			                                        faceIdCounts.size() == 0 ? NULL : &faceIdCounts[0],
+			                                        (int)faceIdCounts.size(),
+			                                        faceIds.size() == 0 ? NULL : &faceIds[0],
+			                                        extent, fuzzyValue, solidIdsData, numOfSolidIds,
+			                                        targetSolidsData, targetFaceCountsData,
+			                                        numOfTargetGroups, targetFaceIdsData);
 		}
 		else if (toolType == "extrudeedges")
 		{
@@ -756,7 +895,23 @@ bool SplitGeometry(int argc, char* argv[])
 			                                         (int)edgeIdCounts.size(),
 			                                         edgeIds.size() == 0 ? NULL : &edgeIds[0],
 			                                         extrusionOffset, extrusionVector, fuzzyValue,
-			                                         solidIdsData, numOfSolidIds);
+			                                         solidIdsData, numOfSolidIds, targetSolidsData,
+			                                         targetFaceCountsData, numOfTargetGroups,
+			                                         targetFaceIdsData);
+		}
+		else if (toolType == "twopointline")
+		{
+			// The line belongs to the surface it is drawn on, so this tool divides faces and nothing else
+			if (numOfTargetGroups == 0)
+			{
+				cerr << "A split along the line between two points needs the ids of the surfaces to split."
+				     << endl;
+				return 1;
+			}
+			cout << "Ng_OCC_SplitWithSurfaceLine" << endl;
+			occ_geom = Ng_OCC_SplitWithSurfaceLine(occ_geom, firstPoint, secondPoint, fuzzyValue,
+			                                       targetSolidsData, targetFaceCountsData, numOfTargetGroups,
+			                                       targetFaceIdsData);
 		}
 		else
 		{

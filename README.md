@@ -20,7 +20,15 @@ edges swept along a direction. The tool is described by a small `<property>: <va
 follows the `.vis` format - unknown properties are ignored, and a missing property keeps its default - so a new
 kind of tool can be added without changing the command line. The caller passes the `Extent` the tool has to
 cover, because one tool is applied to every part of a region and a tool sized per part would come out different
-for each of them. Face and edge ids are read from `Source file` when one is given, which is what lets one part's
+for each of them. `Split target: Shell` turns the same tools into a shell split: the faces named by
+`Target face ids` are divided and the body they belong to is left whole, so a solid comes back a solid with
+more faces instead of being cut in two. It is done by crossing the tool with those faces and imprinting the
+curves that come out, since a curve cannot separate a body. `Tool type: TwoPointLine` has no tool shape at
+all: it draws the line between `Point 1` and `Point 2` in the parameter space of each target face, clipped
+to that face's parameter box, so the line lies on the surface however curved it is and reaches the boundary.
+It is what `BREP_SPLIT_A_FACE_USING_TWO_POINTS` should have been - that command projects a straight edge with
+`BRepAlgo_NormalProjection` and crashes when the chord between the two points passes through the axis of the
+surface. Face and edge ids are read from `Source file` when one is given, which is what lets one part's
 geometry split another. The command reports a failure when the tool added no faces, since the modelling kernel
 returns a shape whether or not it made the cut. Run the executable with no arguments for the full grammar.
 
