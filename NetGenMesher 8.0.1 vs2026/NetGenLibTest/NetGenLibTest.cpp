@@ -50,6 +50,7 @@ bool SplitGeometry(int argc, char* argv[]);
 bool RemoveSolids(int argc, char* argv[]);
 bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
+bool ExtractFaces(int argc, char* argv[]);
 bool ConvertToSolid(int argc, char* argv[]);
 // Stl Mesh
 bool StlMesh(int argc, char* argv[]);
@@ -97,6 +98,7 @@ char** ReadDataFile(int &argc, char* argv[]);
 //
 //STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Temp\ptc.stp" "C:\Temp\geometry.brep"
 //BREP_CONVERT_SOLID_TO_SHELL "C:\Temp\solidBox.brep" "C:\Temp\geometry.brep"
+//BREP_EXTRACT_FACES "C:\Temp\solidBox.brep" "C:\Temp\geometry.brep" 0 1 2 3
 //IGES_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Temp\NX-2D-bracket.igs" "C:\Temp\geometry.brep"
 //BREP_COMPOUND "C:\Temp\geometry_face_2.brep" "C:\Temp\geometry_face_3.brep" "C:\Temp\geometry.brep"
 
@@ -144,6 +146,7 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_SPLIT_CLOSED_FACES") == 0) return SplitClosedFaces(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
+	else if (strcmp(argv[1], "BREP_EXTRACT_FACES") == 0) return ExtractFaces(argc, argv);
 	// Stl Mesh
 	else if (strcmp(argv[1], "STL_MESH") == 0) return StlMesh(argc, argv);
 	else if (strcmp(argv[1], "STL_SURFACE_MESH") == 0) return StlSurfaceMesh(argc, argv);
@@ -1023,6 +1026,57 @@ bool ConvertToShell(int argc, char* argv[])
 		Ng_OCC_Save_BREP(occ_geom, argv[3]);
 		//
 		cout << "Convert ot shell finished successfully." << endl;
+		//
+		return 0;
+	}
+	catch (exception ex)
+	{
+		return 1;
+	}
+}
+bool ExtractFaces(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 6)
+		{
+			cerr << "BREP_EXTRACT_FACES takes an input file, an output file, an offset and at least one"
+			     << " face id." << endl;
+			return 1;
+		}
+		//Define pointer to OCC Geometry
+		Ng_OCC_Geometry* occ_geom;
+		// Initialise the Netgen Core library
+		Ng_Init();
+		// Read in the OCC File
+		cout << "Ng_OCC_Load_BREP" << endl;
+		occ_geom = Ng_OCC_Load_BREP(argv[2]);
+		if (!occ_geom)
+		{
+			cout << "Error reading in BREP File: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Successfully loaded BREP File: " << argv[2] << endl;
+		//
+		std::string::size_type sz;     // alias of size_t
+		double offset = std::stod(argv[4], &sz);
+		//
+		int numOfFaceIds = argc - 5;
+		int * faceIds = new int[numOfFaceIds];
+		for (int i = 0; i < numOfFaceIds; i++) faceIds[i] = std::stoi(argv[5 + i], &sz);
+		//
+		cout << "Ng_OCC_ExtractFaces" << endl;
+		occ_geom = Ng_OCC_ExtractFaces(occ_geom, faceIds, numOfFaceIds, offset);
+		if (!occ_geom)
+		{
+			cout << "Extracting the surfaces failed." << endl;
+			return 1;
+		}
+		// Save
+		cout << "Ng_OCC_Save_BREP" << endl;
+		Ng_OCC_Save_BREP(occ_geom, argv[3]);
+		//
+		cout << "Extract surface finished successfully." << endl;
 		//
 		return 0;
 	}

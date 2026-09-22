@@ -57,6 +57,10 @@
 #include <gp_Lin.hxx>
 #include <typeinfo>
 #include <map>
+#include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepOffsetAPI_MakeOffsetShape.hxx>
+#include <BRepOffset_MakeSimpleOffset.hxx>
+#include <Standard_Failure.hxx>
 
 namespace netgen {
 	extern void MeshFromSpline2D(SplineGeometry2d & geometry,
@@ -1654,6 +1658,139 @@ namespace nglib
 		//
 		return occgeom;
 	}
+	// Everything that was extracted goes into one shell, and so comes back as one part. The faces of a
+	// connected patch keep the edges they share, and a selection that falls apart into several patches is
+	// still one shell, because it was one selection
+	int AddFacesToShell(const TopoDS_Shape & shape, BRep_Builder & builder, TopoDS_Shell & shell)
+	{
+		int numOfFaces = 0;
+		for (TopExp_Explorer exp0(shape, TopAbs_FACE); exp0.More(); exp0.Next())
+		{
+			builder.Add(shell, exp0.Current());
+			numOfFaces++;
+		}
+		return numOfFaces;
+	}
+	TopoDS_Shape OffsetShell(const TopoDS_Shape & shell, double offset, double tolerance)
+	{
+		try
+		{
+			BRepOffsetAPI_MakeOffsetShape makeOffset;
+			makeOffset.PerformByJoin(shell, offset, tolerance, BRepOffset_Skin, Standard_False,
+			                         Standard_False, GeomAbs_Intersection, Standard_False);
+			if (makeOffset.IsDone() && !makeOffset.Shape().IsNull()) return makeOffset.Shape();
+		}
+		catch (Standard_Failure &)
+		{
+		}
+		// The joining offset intersects the offset surfaces with each other and gives up where they
+		// cannot be intersected. The simple offset only moves them, which is enough for a patch whose
+		// faces meet smoothly and is the case a mid surface is usually taken from
+		try
+		{
+			BRepOffset_MakeSimpleOffset simpleOffset(shell, offset);
+			simpleOffset.SetBuildSolidFlag(Standard_False);
+			simpleOffset.Perform();
+			if (simpleOffset.IsDone() && !simpleOffset.GetResultShape().IsNull())
+				return simpleOffset.GetResultShape();
+		}
+		catch (Standard_Failure &)
+		{
+		}
+		//
+		return TopoDS_Shape();
+	}
+	// The faces the ids name, lifted out of the shape that carries them and sewn into shells, so that a
+	// selection covering a connected patch comes back as one body instead of as loose faces. An offset
+	// other than zero moves each patch along its own normals, which is what a mid surface is made of.
+	OCCGeometry * ExtractFaces(Ng_OCC_Geometry * geom, int * faceIds, int numOfIds, double offset)
+	{
+		OCCGeometry * occgeom = (OCCGeometry*)geom;
+		//
+		TopTools_IndexedMapOfShape faces;
+		double tolerance = Precision::Confusion();
+		//
+		for (int i = 0; i < numOfIds; i++)
+		{
+			if (faceIds[i] < 1 || faceIds[i] > occgeom->fmap.Extent()) continue;
+			//
+			TopoDS_Face face = TopoDS::Face(occgeom->fmap.FindKey(faceIds[i]));
+			faces.Add(face);
+			// The faces of one body share their edges, so any tolerance that covers the edges covers the
+			// sewing; the edge tolerances are what an imported geometry actually carries
+			for (TopExp_Explorer exp0(face, TopAbs_EDGE); exp0.More(); exp0.Next())
+			{
+				double edgeTolerance = BRep_Tool::Tolerance(TopoDS::Edge(exp0.Current()));
+				if (edgeTolerance > tolerance) tolerance = edgeTolerance;
+			}
+		}
+		if (faces.Extent() == 0)
+		{
+			cout << "None of the selected surfaces was found in the geometry." << endl;
+			return NULL;
+		}
+		//
+		BRepBuilderAPI_Sewing sewing(2 * tolerance);
+		for (int i = 1; i <= faces.Extent(); i++) sewing.Add(faces.FindKey(i));
+		sewing.Perform();
+		TopoDS_Shape sewedShape = sewing.SewedShape();
+		if (sewedShape.IsNull())
+		{
+			cout << "The selected surfaces could not be sewn into a shell." << endl;
+			return NULL;
+		}
+		// A selection that falls into several patches gives several shells, and each of them is offset on
+		// its own, because an offset follows the surface and not the selection
+		std::vector<TopoDS_Shape> patches;
+		BRep_Builder builder;
+		//
+		for (TopExp_Explorer exp0(sewedShape, TopAbs_SHELL); exp0.More(); exp0.Next())
+			patches.push_back(exp0.Current());
+		for (TopExp_Explorer exp0(sewedShape, TopAbs_FACE, TopAbs_SHELL); exp0.More(); exp0.Next())
+		{
+			TopoDS_Shell shell;
+			builder.MakeShell(shell);
+			builder.Add(shell, exp0.Current());
+			patches.push_back(shell);
+		}
+		//
+		TopoDS_Shell shell;
+		builder.MakeShell(shell);
+		int numOfExtractedFaces = 0;
+		//
+		for (size_t i = 0; i < patches.size(); i++)
+		{
+			if (offset == 0) numOfExtractedFaces += AddFacesToShell(patches[i], builder, shell);
+			else
+			{
+				TopoDS_Shape offsetShape = OffsetShell(patches[i], offset, tolerance);
+				// A surface that lands somewhere other than where it was asked to go is worse than no
+				// surface at all, so a failed offset fails the whole extraction
+				if (offsetShape.IsNull())
+				{
+					cout << "The extracted surface could not be offset by " << offset << "." << endl;
+					return NULL;
+				}
+				numOfExtractedFaces += AddFacesToShell(offsetShape, builder, shell);
+			}
+		}
+		if (numOfExtractedFaces == 0)
+		{
+			cout << "The extraction left no surface at all." << endl;
+			return NULL;
+		}
+		//
+		TopoDS_Compound compound;
+		builder.MakeCompound(compound);
+		builder.Add(compound, shell);
+		//
+		OCCGeometry * newoccgeo = new OCCGeometry;
+		newoccgeo->shape = compound;
+		newoccgeo->changed = 1;
+		newoccgeo->BuildFMap();
+		//
+		return newoccgeo;
+	}
 	bool WriteShapeToBrepFile(const TopoDS_Shape& shape, const char* filename, int numOfSplitFaces)
 	{
 		bool result = false;
@@ -2683,6 +2820,22 @@ namespace nglib
 		{
 			PrintMessage(1, "An error occurred in Ng_OCC_ConvertToSolid.");
 		}
+	}
+
+
+	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ExtractFaces(Ng_OCC_Geometry* geom, int* faceIds, int numOfIds,
+	                                                double offset)
+	{
+		try
+		{
+			OCCGeometry* occgeom = ExtractFaces(geom, faceIds, numOfIds, offset);
+			return ((Ng_OCC_Geometry*)occgeom);
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_ExtractFaces.");
+		}
+		return NULL;
 	}
 
 
