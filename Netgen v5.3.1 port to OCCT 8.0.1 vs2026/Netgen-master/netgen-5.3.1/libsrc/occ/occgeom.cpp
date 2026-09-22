@@ -1433,14 +1433,15 @@ namespace netgen
 		//
 		return result;
 	}
-	// The faces a shell split divides. A face id says the place of the face in the shape it was picked
-	// on, and for a compound that is one of its solids, so the ids arrive grouped: targetFaceCounts[i] of
-	// them are numbered inside solid targetSolids[i]. A solid of zero numbers them in the shape itself.
-	// The faces of a solid are walked here the way the face map walks them, which is the order the solid
-	// was written out of the compound in, so the numbers mean the same thing on both sides.
-	static bool GetSplitTargetFaces(OCCGeometry * occgeom, int * targetSolids, int * targetFaceCounts,
-	                                int numOfTargetGroups, int * targetFaceIds,
-	                                TopTools_IndexedMapOfShape & targetFaces)
+	// The faces a group of ids names, which is what a shell split divides and what a surface extraction
+	// takes. A face id says the place of the face in the shape it was picked on, and for a compound that
+	// is one of its solids, so the ids arrive grouped: targetFaceCounts[i] of them are numbered inside
+	// solid targetSolids[i]. A solid of zero numbers them in the shape itself. The faces of a solid are
+	// walked here the way the face map walks them, which is the order the solid was written out of the
+	// compound in, so the numbers mean the same thing on both sides.
+	bool GetTargetFaces(OCCGeometry * occgeom, int * targetSolids, int * targetFaceCounts,
+	                    int numOfTargetGroups, int * targetFaceIds,
+	                    TopTools_IndexedMapOfShape & targetFaces)
 	{
 		int index = 0;
 		for (int group = 0; group < numOfTargetGroups; group++)
@@ -1553,8 +1554,8 @@ namespace netgen
 		if (numOfTargetGroups > 0)
 		{
 			TopTools_IndexedMapOfShape targetFaces;
-			if (!GetSplitTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups,
-			                         targetFaceIds, targetFaces))
+			if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups,
+			                    targetFaceIds, targetFaces))
 			{
 				PrintMessage(1, "None of the surfaces to split exists.");
 				return occgeom;
@@ -1905,8 +1906,8 @@ namespace netgen
 	                                   int numOfTargetGroups, int * targetFaceIds)
 	{
 		TopTools_IndexedMapOfShape targetFaces;
-		if (!GetSplitTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups, targetFaceIds,
-	                         targetFaces))
+		if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups, targetFaceIds,
+	                    targetFaces))
 		{
 			PrintMessage(1, "None of the surfaces to split exists.");
 			return occgeom;

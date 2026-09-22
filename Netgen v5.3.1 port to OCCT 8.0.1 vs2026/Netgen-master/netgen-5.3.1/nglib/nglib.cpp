@@ -1703,31 +1703,31 @@ namespace nglib
 	// The faces the ids name, lifted out of the shape that carries them and sewn into shells, so that a
 	// selection covering a connected patch comes back as one body instead of as loose faces. An offset
 	// other than zero moves each patch along its own normals, which is what a mid surface is made of.
-	OCCGeometry * ExtractFaces(Ng_OCC_Geometry * geom, int * faceIds, int numOfIds, double offset)
+	// The ids are numbered inside solid solidNumber of the shape, or in the shape itself when it is zero,
+	// which is how the faces of a compound sub part are named.
+	OCCGeometry * ExtractFaces(Ng_OCC_Geometry * geom, int solidNumber, int * faceIds, int numOfIds,
+	                           double offset)
 	{
 		OCCGeometry * occgeom = (OCCGeometry*)geom;
 		//
 		TopTools_IndexedMapOfShape faces;
-		double tolerance = Precision::Confusion();
-		//
-		for (int i = 0; i < numOfIds; i++)
+		int targetSolids[1] = { solidNumber };
+		int targetFaceCounts[1] = { numOfIds };
+		if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, 1, faceIds, faces))
 		{
-			if (faceIds[i] < 1 || faceIds[i] > occgeom->fmap.Extent()) continue;
-			//
-			TopoDS_Face face = TopoDS::Face(occgeom->fmap.FindKey(faceIds[i]));
-			faces.Add(face);
-			// The faces of one body share their edges, so any tolerance that covers the edges covers the
-			// sewing; the edge tolerances are what an imported geometry actually carries
-			for (TopExp_Explorer exp0(face, TopAbs_EDGE); exp0.More(); exp0.Next())
+			cout << "None of the selected surfaces was found in the geometry." << endl;
+			return NULL;
+		}
+		// The faces of one body share their edges, so any tolerance that covers the edges covers the
+		// sewing; the edge tolerances are what an imported geometry actually carries
+		double tolerance = Precision::Confusion();
+		for (int i = 1; i <= faces.Extent(); i++)
+		{
+			for (TopExp_Explorer exp0(faces.FindKey(i), TopAbs_EDGE); exp0.More(); exp0.Next())
 			{
 				double edgeTolerance = BRep_Tool::Tolerance(TopoDS::Edge(exp0.Current()));
 				if (edgeTolerance > tolerance) tolerance = edgeTolerance;
 			}
-		}
-		if (faces.Extent() == 0)
-		{
-			cout << "None of the selected surfaces was found in the geometry." << endl;
-			return NULL;
 		}
 		//
 		BRepBuilderAPI_Sewing sewing(2 * tolerance);
@@ -2823,12 +2823,12 @@ namespace nglib
 	}
 
 
-	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ExtractFaces(Ng_OCC_Geometry* geom, int* faceIds, int numOfIds,
-	                                                double offset)
+	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ExtractFaces(Ng_OCC_Geometry* geom, int solidNumber, int* faceIds,
+	                                                int numOfIds, double offset)
 	{
 		try
 		{
-			OCCGeometry* occgeom = ExtractFaces(geom, faceIds, numOfIds, offset);
+			OCCGeometry* occgeom = ExtractFaces(geom, solidNumber, faceIds, numOfIds, offset);
 			return ((Ng_OCC_Geometry*)occgeom);
 		}
 		catch (exception ex)

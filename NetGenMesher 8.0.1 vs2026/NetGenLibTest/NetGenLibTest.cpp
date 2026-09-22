@@ -98,7 +98,7 @@ char** ReadDataFile(int &argc, char* argv[]);
 //
 //STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Temp\ptc.stp" "C:\Temp\geometry.brep"
 //BREP_CONVERT_SOLID_TO_SHELL "C:\Temp\solidBox.brep" "C:\Temp\geometry.brep"
-//BREP_EXTRACT_FACES "C:\Temp\solidBox.brep" "C:\Temp\geometry.brep" 0 1 2 3
+//BREP_EXTRACT_FACES "C:\Temp\solidBox.brep" "C:\Temp\geometry.brep" 0 0 1 2 3
 //IGES_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Temp\NX-2D-bracket.igs" "C:\Temp\geometry.brep"
 //BREP_COMPOUND "C:\Temp\geometry_face_2.brep" "C:\Temp\geometry_face_3.brep" "C:\Temp\geometry.brep"
 
@@ -1038,10 +1038,10 @@ bool ExtractFaces(int argc, char* argv[])
 {
 	try
 	{
-		if (argc < 6)
+		if (argc < 7)
 		{
-			cerr << "BREP_EXTRACT_FACES takes an input file, an output file, an offset and at least one"
-			     << " face id." << endl;
+			cerr << "BREP_EXTRACT_FACES takes an input file, an output file, an offset, a solid number"
+			     << " and at least one face id." << endl;
 			return 1;
 		}
 		//Define pointer to OCC Geometry
@@ -1060,13 +1060,15 @@ bool ExtractFaces(int argc, char* argv[])
 		//
 		std::string::size_type sz;     // alias of size_t
 		double offset = std::stod(argv[4], &sz);
+		// The face ids are numbered inside this solid of the shape, or in the shape itself when it is 0
+		int solidNumber = std::stoi(argv[5], &sz);
 		//
-		int numOfFaceIds = argc - 5;
+		int numOfFaceIds = argc - 6;
 		int * faceIds = new int[numOfFaceIds];
-		for (int i = 0; i < numOfFaceIds; i++) faceIds[i] = std::stoi(argv[5 + i], &sz);
+		for (int i = 0; i < numOfFaceIds; i++) faceIds[i] = std::stoi(argv[6 + i], &sz);
 		//
 		cout << "Ng_OCC_ExtractFaces" << endl;
-		occ_geom = Ng_OCC_ExtractFaces(occ_geom, faceIds, numOfFaceIds, offset);
+		occ_geom = Ng_OCC_ExtractFaces(occ_geom, solidNumber, faceIds, numOfFaceIds, offset);
 		if (!occ_geom)
 		{
 			cout << "Extracting the surfaces failed." << endl;
