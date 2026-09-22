@@ -723,11 +723,13 @@ DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitAFaceUsingTwoPoints(Ng_OCC_Geometry * g
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_RemoveSolids(Ng_OCC_Geometry * geom, int * solidIds, int numOfSolidIds);
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithPlane(Ng_OCC_Geometry * geom, double * origin, double * normal, double * extent, double fuzzyValue, int * solidIds, int numOfSolidIds, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds);
 
-DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom, Ng_OCC_Geometry ** sourceGeoms, int * faceIdCounts, int numOfSources, int * faceIds, double * extent, double fuzzyValue, int * solidIds, int numOfSolidIds, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds);
+DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom, Ng_OCC_Geometry ** sourceGeoms, int * faceIdCounts, int numOfSources, int * faceIds, double * extent, double offset, double fuzzyValue, int * solidIds, int numOfSolidIds, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds);
 
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtrudedEdges(Ng_OCC_Geometry * geom, Ng_OCC_Geometry ** sourceGeoms, int * edgeIdCounts, int numOfSources, int * edgeIds, double * offset, double * vector, double fuzzyValue, int * solidIds, int numOfSolidIds, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds);
 
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithSurfaceLine(Ng_OCC_Geometry * geom, double * firstPoint, double * secondPoint, double fuzzyValue, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds);
+
+DLL_HEADER Ng_Result Ng_OCC_SaveBrepWithSplitClosedFaces(Ng_OCC_Geometry * geom, const char* filename, int numOfSplitFaces);
 
 DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ConvertToShell(Ng_OCC_Geometry* geom);
 

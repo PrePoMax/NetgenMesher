@@ -2368,6 +2368,25 @@ namespace nglib
 		return NG_OK;
 	}
 
+	// The whole shape is divided at once, so that a face two solids share is divided in both and they
+	// still meet on it. Dividing a solid on its own, which is what writing the parts does, gives each
+	// of them a face of its own and a numbering the shape they came from does not have.
+	DLL_HEADER Ng_Result Ng_OCC_SaveBrepWithSplitClosedFaces(Ng_OCC_Geometry * geom, const char* filename,
+	                                                         int numOfSplitFaces)
+	{
+		try
+		{
+			OCCGeometry * occgeom = (OCCGeometry*)geom;
+			WriteShapeToBrepFile(occgeom->shape, filename, numOfSplitFaces);
+			return NG_OK;
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_SaveBrepWithSplitClosedFaces.");
+		}
+		return NG_ERROR;
+	}
+
 	DLL_HEADER int Ng_OCC_WriteAssemblyAsSolidParts(Ng_OCC_Geometry * geom, int countStart, const char* filename, int numOfSplitFaces)
 	{
 		OCCGeometry * occgeom = (OCCGeometry*)geom;
@@ -2523,7 +2542,7 @@ namespace nglib
 	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom,
 	                                                          Ng_OCC_Geometry ** sourceGeoms, int * faceIdCounts,
 	                                                          int numOfSources, int * faceIds, double * extent,
-	                                                          double fuzzyValue, int * solidIds,
+	                                                          double offset, double fuzzyValue, int * solidIds,
 	                                                          int numOfSolidIds, int * targetSolids,
 	                                                          int * targetFaceCounts, int numOfTargetGroups,
 	                                                          int * targetFaceIds)
@@ -2533,7 +2552,7 @@ namespace nglib
 			OCCGeometry * occgeom = (OCCGeometry*)geom;
 			OCCGeometry ** sourceoccgeoms = (OCCGeometry**)sourceGeoms;
 			occgeom = SplitWithExtendedFace(occgeom, sourceoccgeoms, faceIdCounts, numOfSources, faceIds,
-			                               extent, fuzzyValue, solidIds, numOfSolidIds, targetSolids,
+			                               extent, offset, fuzzyValue, solidIds, numOfSolidIds, targetSolids,
 			                               targetFaceCounts, numOfTargetGroups, targetFaceIds);
 			return ((Ng_OCC_Geometry *)occgeom);
 		}

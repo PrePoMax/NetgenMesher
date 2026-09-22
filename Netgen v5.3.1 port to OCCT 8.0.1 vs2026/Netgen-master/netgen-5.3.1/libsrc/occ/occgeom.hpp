@@ -477,8 +477,8 @@ namespace netgen
 	OCCGeometry * RemoveSolids(OCCGeometry * occgeom, int * solidIds, int numOfSolidIds);
 	OCCGeometry * SplitWithExtendedFace(OCCGeometry * occgeom, OCCGeometry ** sourcegeoms,
 	                                          int * faceIdCounts, int numOfSources, int * faceIds,
-	                                          double * extent, double fuzzyValue, int * solidIds,
-	                                          int numOfSolidIds, int * targetSolids,
+	                                          double * extent, double offset, double fuzzyValue,
+	                                          int * solidIds, int numOfSolidIds, int * targetSolids,
 	                                          int * targetFaceCounts, int numOfTargetGroups,
 	                                          int * targetFaceIds);
 	OCCGeometry * SplitWithExtrudedEdges(OCCGeometry * occgeom, OCCGeometry ** sourcegeoms,

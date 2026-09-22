@@ -48,6 +48,7 @@ bool ReverseBrepFaceOrientations(int argc, char* argv[]);
 bool SplitAFaceUsingTwoPoints(int argc, char* argv[]);
 bool SplitGeometry(int argc, char* argv[]);
 bool RemoveSolids(int argc, char* argv[]);
+bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool ConvertToSolid(int argc, char* argv[]);
 // Stl Mesh
@@ -140,6 +141,7 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_SPLIT_A_FACE_USING_TWO_POINTS") == 0) return SplitAFaceUsingTwoPoints(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT") == 0) return SplitGeometry(argc, argv);
 	else if (strcmp(argv[1], "BREP_REMOVE_SOLIDS") == 0) return RemoveSolids(argc, argv);
+	else if (strcmp(argv[1], "BREP_SPLIT_CLOSED_FACES") == 0) return SplitClosedFaces(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
 	// Stl Mesh
@@ -258,6 +260,9 @@ void PrintUsage(const char* exePath)
 	cout << "      Plane adds         Plane origin: x y z" << endl;
 	cout << "                         Plane normal: x y z" << endl;
 	cout << "      ExtendFace adds    Face ids: <id> <id> ..." << endl;
+	cout << "                         Offset: <distance>           (optional)" << endl;
+	cout << "          moves each continued surface along its own normal, which" << endl;
+	cout << "          grows the radius of a cylinder, a cone, a sphere or a torus" << endl;
 	cout << "      ExtrudeEdges adds  Edge ids: <id> <id> ..." << endl;
 	cout << "      TwoPointLine adds  Point 1: x y z" << endl;
 	cout << "                         Point 2: x y z" << endl;
@@ -269,6 +274,11 @@ void PrintUsage(const char* exePath)
 	cout << "      The extent is the box the tool has to cover, so that one tool is the" << endl;
 	cout << "      same for every part it is applied to.  Face and edge ids are read from" << endl;
 	cout << "      the source file when one is given, otherwise from the input file." << endl;
+	cout << "  BREP_SPLIT_CLOSED_FACES            <in.brep> <out.brep> [maxSplitFaces]" << endl;
+	cout << "      Divides every closed face of the whole shape, the way the parts of" << endl;
+	cout << "      an assembly are divided when they are written out, so that a shape" << endl;
+	cout << "      and the parts taken from it are numbered the same.  Defaults to 1," << endl;
+	cout << "      which divides nothing." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -746,6 +756,7 @@ bool SplitGeometry(int argc, char* argv[])
 		vector<string> sourceFileNames;
 		vector<int> edgeIdCounts;
 		double fuzzyValue = 0;
+		double offset = 0;
 		double extent[6] = { 0, 0, 0, 0, 0, 0 };
 		double origin[3] = { 0, 0, 0 };
 		double normal[3] = { 0, 0, 1 };
@@ -779,6 +790,7 @@ bool SplitGeometry(int argc, char* argv[])
 				faceIdCounts.push_back(0);
 			}
 			else if (key == "fuzzyvalue") fuzzyValue = stod(value);
+			else if (key == "offset") offset = stod(value);
 			else if (key == "extent") ReadToolValues(value, extent, 6);
 			else if (key == "planeorigin") ReadToolValues(value, origin, 3);
 			else if (key == "planenormal") ReadToolValues(value, normal, 3);
@@ -882,7 +894,7 @@ bool SplitGeometry(int argc, char* argv[])
 			                                        faceIdCounts.size() == 0 ? NULL : &faceIdCounts[0],
 			                                        (int)faceIdCounts.size(),
 			                                        faceIds.size() == 0 ? NULL : &faceIds[0],
-			                                        extent, fuzzyValue, solidIdsData, numOfSolidIds,
+			                                        extent, offset, fuzzyValue, solidIdsData, numOfSolidIds,
 			                                        targetSolidsData, targetFaceCountsData,
 			                                        numOfTargetGroups, targetFaceIdsData);
 		}
@@ -934,6 +946,47 @@ bool SplitGeometry(int argc, char* argv[])
 		//
 		cout << "Split geometry finished successfully: " << numOfFacesAfter - numOfFacesBefore
 		     << " faces were added." << endl;
+		//
+		return 0;
+	}
+	catch (exception ex)
+	{
+		return 1;
+	}
+}
+// A shape whose closed faces are divided the way the parts written out of it are, so that the two
+// carry the same faces in the same order. Without it a compound keeps one closed face where the
+// part taken from it has two, and a face id read on the part names nothing in the compound.
+bool SplitClosedFaces(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 4)
+		{
+			cerr << "The BREP_SPLIT_CLOSED_FACES command needs an input file and an output file." << endl;
+			return 1;
+		}
+		int numOfSplitFaces = argc > 4 ? atoi(argv[4]) : 1;
+		//
+		Ng_Init();
+		//
+		cout << "Ng_OCC_Load_BREP" << endl;
+		Ng_OCC_Geometry * occ_geom = Ng_OCC_Load_BREP(argv[2]);
+		if (!occ_geom)
+		{
+			cout << "Error reading in BREP File: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Successfully loaded BREP File: " << argv[2] << endl;
+		//
+		cout << "Ng_OCC_SaveBrepWithSplitClosedFaces" << endl;
+		if (Ng_OCC_SaveBrepWithSplitClosedFaces(occ_geom, argv[3], numOfSplitFaces) != NG_OK)
+		{
+			cerr << "The closed faces of the shape could not be divided." << endl;
+			return 1;
+		}
+		//
+		cout << "Split closed faces finished successfully." << endl;
 		//
 		return 0;
 	}

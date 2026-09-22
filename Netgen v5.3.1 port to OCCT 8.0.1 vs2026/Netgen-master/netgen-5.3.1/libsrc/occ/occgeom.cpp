@@ -34,6 +34,10 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <Geom_Plane.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <Geom_ConicalSurface.hxx>
+#include <Geom_SphericalSurface.hxx>
+#include <Geom_ToroidalSurface.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <Geom2d_Line.hxx>
@@ -1654,15 +1658,76 @@ namespace netgen
 		                     numOfSolidIds, targetSolids, targetFaceCounts, numOfTargetGroups,
 		                     targetFaceIds);
 	}
+	// A surface moved along its own normal. Every surface that continues past its face is one of five
+	// kinds, and each of them offsets exactly into another surface of the same kind, so an offset tool
+	// is still a plane, a cylinder, a cone, a sphere or a torus and not a surface the modelling kernel
+	// has to approximate. A positive offset moves a plane along its normal and grows the radius of the
+	// others; one that would leave no surface at all - a radius at or below zero, a torus that would
+	// close on itself - is refused, and the face it came from is left out of the tool.
+	static bool OffsetSplitToolSurface(const Handle(Geom_Surface) & surface, double offset,
+	                                   Handle(Geom_Surface) & offsetSurface)
+	{
+		if (offset == 0)
+		{
+			offsetSurface = surface;
+			return true;
+		}
+		//
+		Handle(Standard_Type) type = surface->DynamicType();
+		if (type == STANDARD_TYPE(Geom_Plane))
+		{
+			gp_Pln plane = Handle(Geom_Plane)::DownCast(surface)->Pln();
+			plane.Translate(gp_Vec(plane.Axis().Direction()) * offset);
+			offsetSurface = new Geom_Plane(plane);
+			return true;
+		}
+		if (type == STANDARD_TYPE(Geom_CylindricalSurface))
+		{
+			Handle(Geom_CylindricalSurface) cylinder = Handle(Geom_CylindricalSurface)::DownCast(surface);
+			double radius = cylinder->Radius() + offset;
+			if (radius <= Precision::Confusion()) return false;
+			offsetSurface = new Geom_CylindricalSurface(cylinder->Position(), radius);
+			return true;
+		}
+		if (type == STANDARD_TYPE(Geom_ConicalSurface))
+		{
+			Handle(Geom_ConicalSurface) cone = Handle(Geom_ConicalSurface)::DownCast(surface);
+			double cosine = cos(cone->SemiAngle());
+			if (fabs(cosine) <= Precision::Confusion()) return false;
+			// The offset is measured along the normal and the radius across the axis, and the two stand
+			// at the half angle of the cone to each other
+			double radius = cone->RefRadius() + offset / cosine;
+			if (radius < 0) return false;
+			offsetSurface = new Geom_ConicalSurface(cone->Position(), cone->SemiAngle(), radius);
+			return true;
+		}
+		if (type == STANDARD_TYPE(Geom_SphericalSurface))
+		{
+			Handle(Geom_SphericalSurface) sphere = Handle(Geom_SphericalSurface)::DownCast(surface);
+			double radius = sphere->Radius() + offset;
+			if (radius <= Precision::Confusion()) return false;
+			offsetSurface = new Geom_SphericalSurface(sphere->Position(), radius);
+			return true;
+		}
+		if (type == STANDARD_TYPE(Geom_ToroidalSurface))
+		{
+			Handle(Geom_ToroidalSurface) torus = Handle(Geom_ToroidalSurface)::DownCast(surface);
+			double minorRadius = torus->MinorRadius() + offset;
+			if (minorRadius <= Precision::Confusion() || minorRadius >= torus->MajorRadius()) return false;
+			offsetSurface = new Geom_ToroidalSurface(torus->Position(), torus->MajorRadius(), minorRadius);
+			return true;
+		}
+		return false;
+	}
 	// Several faces may be extended at once, and they may sit on several shapes - a compound is split
 	// as a whole while its pieces are what the faces are picked on - so the ids arrive grouped:
 	// faceIdCounts[i] of them belong to sourcegeoms[i]. Each becomes a tool face of its own and they
 	// cut together, as one compound tool.
 	OCCGeometry * SplitWithExtendedFace(OCCGeometry * occgeom, OCCGeometry ** sourcegeoms,
 	                                    int * faceIdCounts, int numOfSources, int * faceIds,
-	                                    double * extent, double fuzzyValue, int * solidIds,
-	                                    int numOfSolidIds, int * targetSolids, int * targetFaceCounts,
-	                                    int numOfTargetGroups, int * targetFaceIds)
+	                                    double * extent, double offset, double fuzzyValue,
+	                                    int * solidIds, int numOfSolidIds, int * targetSolids,
+	                                    int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds)
 	{
 		BRep_Builder builder;
 		TopoDS_Compound tool;
@@ -1681,8 +1746,12 @@ namespace netgen
 				TopoDS_Face face = TopoDS::Face(sourcegeom->fmap(faceIds[index]));
 				Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
 				if (surface.IsNull()) continue;
+				// The face is continued past its boundary as the surface it lies on, moved along its own
+				// normal when an offset is asked for
+				Handle(Geom_Surface) offsetSurface;
+				if (!OffsetSplitToolSurface(surface, offset, offsetSurface)) continue;
 				//
-				TopoDS_Shape toolFace = MakeToolFaceFromSurface(surface, extent);
+				TopoDS_Shape toolFace = MakeToolFaceFromSurface(offsetSurface, extent);
 				if (toolFace.IsNull()) continue;
 				//
 				builder.Add(tool, toolFace);
