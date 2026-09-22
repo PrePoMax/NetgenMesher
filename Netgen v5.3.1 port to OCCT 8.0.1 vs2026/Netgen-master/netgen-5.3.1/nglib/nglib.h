@@ -735,7 +735,7 @@ DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ConvertToShell(Ng_OCC_Geometry* geom);
 
 DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ConvertToSolid(Ng_OCC_Geometry* geom);
 
-DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ExtractFaces(Ng_OCC_Geometry* geom, int solidNumber, int* faceIds, int numOfIds, double offset);
+DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ExtractFaces(Ng_OCC_Geometry* geom, int* targetSolids, int* targetFaceCounts, int numOfTargetGroups, int* faceIds, double offset);
 
 #endif // OCCGEOMETRY
 

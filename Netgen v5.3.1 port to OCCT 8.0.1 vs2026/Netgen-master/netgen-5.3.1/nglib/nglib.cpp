@@ -1703,17 +1703,17 @@ namespace nglib
 	// The faces the ids name, lifted out of the shape that carries them and sewn into shells, so that a
 	// selection covering a connected patch comes back as one body instead of as loose faces. An offset
 	// other than zero moves each patch along its own normals, which is what a mid surface is made of.
-	// The ids are numbered inside solid solidNumber of the shape, or in the shape itself when it is zero,
-	// which is how the faces of a compound sub part are named.
-	OCCGeometry * ExtractFaces(Ng_OCC_Geometry * geom, int solidNumber, int * faceIds, int numOfIds,
-	                           double offset)
+	// The ids arrive grouped the way a shell split sends them: targetFaceCounts[i] of them are numbered
+	// inside solid targetSolids[i], and a solid of zero numbers them in the shape itself. That is what a
+	// compound needs - the faces of each of its sub parts are numbered inside the solid the sub part was
+	// written out of - and what lets the faces of several sub parts be sewn into one body.
+	OCCGeometry * ExtractFaces(Ng_OCC_Geometry * geom, int * targetSolids, int * targetFaceCounts,
+	                           int numOfTargetGroups, int * faceIds, double offset)
 	{
 		OCCGeometry * occgeom = (OCCGeometry*)geom;
 		//
 		TopTools_IndexedMapOfShape faces;
-		int targetSolids[1] = { solidNumber };
-		int targetFaceCounts[1] = { numOfIds };
-		if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, 1, faceIds, faces))
+		if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds, faces))
 		{
 			cout << "None of the selected surfaces was found in the geometry." << endl;
 			return NULL;
@@ -2823,12 +2823,14 @@ namespace nglib
 	}
 
 
-	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ExtractFaces(Ng_OCC_Geometry* geom, int solidNumber, int* faceIds,
-	                                                int numOfIds, double offset)
+	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ExtractFaces(Ng_OCC_Geometry* geom, int* targetSolids,
+	                                                int* targetFaceCounts, int numOfTargetGroups,
+	                                                int* faceIds, double offset)
 	{
 		try
 		{
-			OCCGeometry* occgeom = ExtractFaces(geom, solidNumber, faceIds, numOfIds, offset);
+			OCCGeometry* occgeom = ExtractFaces(geom, targetSolids, targetFaceCounts, numOfTargetGroups,
+			                                    faceIds, offset);
 			return ((Ng_OCC_Geometry*)occgeom);
 		}
 		catch (exception ex)
