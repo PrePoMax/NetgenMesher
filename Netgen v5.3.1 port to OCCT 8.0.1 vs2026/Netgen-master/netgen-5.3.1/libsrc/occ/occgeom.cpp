@@ -36,6 +36,7 @@
 #include <Geom_Plane.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_ConicalSurface.hxx>
+#include <GeomAdaptor_Surface.hxx>
 #include <Geom_SphericalSurface.hxx>
 #include <Geom_ToroidalSurface.hxx>
 #include <TopTools_ListOfShape.hxx>
@@ -1673,52 +1674,58 @@ namespace netgen
 			offsetSurface = surface;
 			return true;
 		}
-		//
-		Handle(Standard_Type) type = surface->DynamicType();
-		if (type == STANDARD_TYPE(Geom_Plane))
+		// The kind is read through the adaptor, as the geometry metadata reads it, so a surface a face
+		// holds inside a trimmed surface - as a split leaves it - is offset as the cylinder or plane the
+		// symbol showed, instead of being refused as a kind that cannot be offset
+		GeomAdaptor_Surface adaptor(surface);
+		switch (adaptor.GetType())
 		{
-			gp_Pln plane = Handle(Geom_Plane)::DownCast(surface)->Pln();
-			plane.Translate(gp_Vec(plane.Axis().Direction()) * offset);
-			offsetSurface = new Geom_Plane(plane);
-			return true;
+			case GeomAbs_Plane:
+			{
+				gp_Pln plane = adaptor.Plane();
+				plane.Translate(gp_Vec(plane.Axis().Direction()) * offset);
+				offsetSurface = new Geom_Plane(plane);
+				return true;
+			}
+			case GeomAbs_Cylinder:
+			{
+				gp_Cylinder cylinder = adaptor.Cylinder();
+				double radius = cylinder.Radius() + offset;
+				if (radius <= Precision::Confusion()) return false;
+				offsetSurface = new Geom_CylindricalSurface(cylinder.Position(), radius);
+				return true;
+			}
+			case GeomAbs_Cone:
+			{
+				gp_Cone cone = adaptor.Cone();
+				double cosine = cos(cone.SemiAngle());
+				if (fabs(cosine) <= Precision::Confusion()) return false;
+				// The offset is measured along the normal and the radius across the axis, and the two stand
+				// at the half angle of the cone to each other
+				double radius = cone.RefRadius() + offset / cosine;
+				if (radius < 0) return false;
+				offsetSurface = new Geom_ConicalSurface(cone.Position(), cone.SemiAngle(), radius);
+				return true;
+			}
+			case GeomAbs_Sphere:
+			{
+				gp_Sphere sphere = adaptor.Sphere();
+				double radius = sphere.Radius() + offset;
+				if (radius <= Precision::Confusion()) return false;
+				offsetSurface = new Geom_SphericalSurface(sphere.Position(), radius);
+				return true;
+			}
+			case GeomAbs_Torus:
+			{
+				gp_Torus torus = adaptor.Torus();
+				double minorRadius = torus.MinorRadius() + offset;
+				if (minorRadius <= Precision::Confusion() || minorRadius >= torus.MajorRadius()) return false;
+				offsetSurface = new Geom_ToroidalSurface(torus.Position(), torus.MajorRadius(), minorRadius);
+				return true;
+			}
+			default:
+				return false;
 		}
-		if (type == STANDARD_TYPE(Geom_CylindricalSurface))
-		{
-			Handle(Geom_CylindricalSurface) cylinder = Handle(Geom_CylindricalSurface)::DownCast(surface);
-			double radius = cylinder->Radius() + offset;
-			if (radius <= Precision::Confusion()) return false;
-			offsetSurface = new Geom_CylindricalSurface(cylinder->Position(), radius);
-			return true;
-		}
-		if (type == STANDARD_TYPE(Geom_ConicalSurface))
-		{
-			Handle(Geom_ConicalSurface) cone = Handle(Geom_ConicalSurface)::DownCast(surface);
-			double cosine = cos(cone->SemiAngle());
-			if (fabs(cosine) <= Precision::Confusion()) return false;
-			// The offset is measured along the normal and the radius across the axis, and the two stand
-			// at the half angle of the cone to each other
-			double radius = cone->RefRadius() + offset / cosine;
-			if (radius < 0) return false;
-			offsetSurface = new Geom_ConicalSurface(cone->Position(), cone->SemiAngle(), radius);
-			return true;
-		}
-		if (type == STANDARD_TYPE(Geom_SphericalSurface))
-		{
-			Handle(Geom_SphericalSurface) sphere = Handle(Geom_SphericalSurface)::DownCast(surface);
-			double radius = sphere->Radius() + offset;
-			if (radius <= Precision::Confusion()) return false;
-			offsetSurface = new Geom_SphericalSurface(sphere->Position(), radius);
-			return true;
-		}
-		if (type == STANDARD_TYPE(Geom_ToroidalSurface))
-		{
-			Handle(Geom_ToroidalSurface) torus = Handle(Geom_ToroidalSurface)::DownCast(surface);
-			double minorRadius = torus->MinorRadius() + offset;
-			if (minorRadius <= Precision::Confusion() || minorRadius >= torus->MajorRadius()) return false;
-			offsetSurface = new Geom_ToroidalSurface(torus->Position(), torus->MajorRadius(), minorRadius);
-			return true;
-		}
-		return false;
 	}
 	// Several faces may be extended at once, and they may sit on several shapes - a compound is split
 	// as a whole while its pieces are what the faces are picked on - so the ids arrive grouped:
