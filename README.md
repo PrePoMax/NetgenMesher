@@ -30,7 +30,12 @@ It is what `BREP_SPLIT_A_FACE_USING_TWO_POINTS` should have been - that command 
 `BRepAlgo_NormalProjection` and crashes when the chord between the two points passes through the axis of the
 surface. Face and edge ids are read from `Source file` when one is given, which is what lets one part's
 geometry split another. The command reports a failure when the tool added no faces, since the modelling kernel
-returns a shape whether or not it made the cut. Run the executable with no arguments for the full grammar.
+returns a shape whether or not it made the cut. Beside the result it writes `<output>.origins`, one line per
+solid of the result in explorer order, holding the number of the input solid that piece came from (counted
+the same way, 0 if none holds it). A split only divides solids, so each piece lies inside exactly one input
+solid; a point found just inside the piece is classified against the input solids to name it. PrePoMax reads
+the file to keep what it knew about a solid - its sub part, its color - on the pieces it became. Run the
+executable with no arguments for the full grammar.
 
 `BREP_MESH` reads two optional entries after `parallel_meshing_threads` in the mesh parameters file.
 `transfinite_faces` meshes 4-sided faces as structured triangle grids when the edge meshing put the

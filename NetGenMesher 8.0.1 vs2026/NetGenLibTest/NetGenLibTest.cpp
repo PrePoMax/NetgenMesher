@@ -15,6 +15,16 @@
 #include "TopoDS_Shape.hxx"
 #include "GProp_GProps.hxx"
 #include "BRepGProp.hxx"
+#include "BRep_Builder.hxx"
+#include "BRepTools.hxx"
+#include "BRepBndLib.hxx"
+#include "BRepAdaptor_Surface.hxx"
+#include "BRepClass_FaceClassifier.hxx"
+#include "BRepClass3d_SolidClassifier.hxx"
+#include "Bnd_Box.hxx"
+#include "TopExp_Explorer.hxx"
+#include "gp_Pnt2d.hxx"
+#include "Precision.hxx"
 
 #include "windows.h"
 //#include "nglib.h"
@@ -720,6 +730,103 @@ bool RemoveSolids(int argc, char* argv[])
 	}
 	return 0;
 }
+// A point strictly inside the solid, found just behind one of its faces. The classifier confirms it,
+// so a face whose normal points the other way, or a sample that falls in a hole, only costs a retry
+static bool FindPointInsideSolid(const TopoDS_Shape & solid, gp_Pnt & point)
+{
+	Bnd_Box box;
+	BRepBndLib::Add(solid, box);
+	if (box.IsVoid()) return false;
+	double diagonal = sqrt(box.SquareExtent());
+	double tolerance = 1e-7 * diagonal;
+	const double fractions[3] = { 1e-3, 1e-4, 1e-2 };
+	//
+	for (TopExp_Explorer exp0(solid, TopAbs_FACE); exp0.More(); exp0.Next())
+	{
+		TopoDS_Face face = TopoDS::Face(exp0.Current());
+		BRepAdaptor_Surface surface(face);
+		double u1, u2, v1, v2;
+		BRepTools::UVBounds(face, u1, u2, v1, v2);
+		//
+		for (int i = 1; i <= 3; i++)
+		{
+			for (int j = 1; j <= 3; j++)
+			{
+				double u = u1 + (u2 - u1) * i / 4.0;
+				double v = v1 + (v2 - v1) * j / 4.0;
+				BRepClass_FaceClassifier faceClassifier(face, gp_Pnt2d(u, v), Precision::PConfusion());
+				if (faceClassifier.State() != TopAbs_IN) continue;
+				//
+				gp_Pnt onFace;
+				gp_Vec du, dv;
+				surface.D1(u, v, onFace, du, dv);
+				gp_Vec normal = du.Crossed(dv);
+				if (normal.Magnitude() < gp::Resolution()) continue;
+				normal.Normalize();
+				//
+				for (double fraction : fractions)
+				{
+					for (int side = -1; side <= 1; side += 2)
+					{
+						gp_Pnt inside = onFace.Translated(normal * (side * fraction * diagonal));
+						BRepClass3d_SolidClassifier solidClassifier(solid, inside, tolerance);
+						if (solidClassifier.State() == TopAbs_IN)
+						{
+							point = inside;
+							return true;
+						}
+					}
+				}
+			}
+		}
+	}
+	return false;
+}
+// A split only divides solids, so every solid it gives back lies inside exactly one of the solids it
+// was given. Which one is written next to the result, one line per solid in the order the explorer
+// walks them, as the number of the solid it came from counted the same way, or 0 where no solid holds
+// it. The caller keeps what it knew about a solid - its name, its part - on the pieces it became.
+static bool WriteSplitSolidOrigins(const TopoDS_Shape & inputShape, const char * outputFileName)
+{
+	BRep_Builder builder;
+	TopoDS_Shape outputShape;
+	if (!BRepTools::Read(outputShape, outputFileName, builder)) return false;
+	//
+	vector<TopoDS_Shape> inputSolids;
+	for (TopExp_Explorer exp0(inputShape, TopAbs_SOLID); exp0.More(); exp0.Next())
+		inputSolids.push_back(exp0.Current());
+	//
+	vector<int> origins;
+	for (TopExp_Explorer exp0(outputShape, TopAbs_SOLID); exp0.More(); exp0.Next())
+	{
+		int origin = 0;
+		if (inputSolids.size() == 1) origin = 1;
+		else
+		{
+			gp_Pnt inside;
+			if (FindPointInsideSolid(exp0.Current(), inside))
+			{
+				Bnd_Box box;
+				BRepBndLib::Add(exp0.Current(), box);
+				double tolerance = 1e-7 * sqrt(box.SquareExtent());
+				for (size_t i = 0; i < inputSolids.size(); i++)
+				{
+					BRepClass3d_SolidClassifier classifier(inputSolids[i], inside, tolerance);
+					if (classifier.State() == TopAbs_IN) { origin = (int)i + 1; break; }
+				}
+			}
+		}
+		origins.push_back(origin);
+	}
+	//
+	string originsFileName = string(outputFileName) + ".origins";
+	ofstream originsFile(originsFileName);
+	if (!originsFile) return false;
+	for (size_t i = 0; i < origins.size(); i++) originsFile << origins[i] << endl;
+	originsFile.close();
+	//
+	return true;
+}
 bool SplitGeometry(int argc, char* argv[])
 {
 	try
@@ -744,6 +851,10 @@ bool SplitGeometry(int argc, char* argv[])
 			return 1;
 		}
 		cout << "Successfully loaded BREP File: " << argv[2] << endl;
+		// The shape as it was given, read before the result is written, since the two may be one file
+		BRep_Builder inputBuilder;
+		TopoDS_Shape inputShape;
+		BRepTools::Read(inputShape, argv[2], inputBuilder);
 		//
 		Ng_OCC_GetFMap(occ_geom, occ_fmap);
 		int numOfFacesBefore = FMap.Extent();
@@ -946,6 +1057,12 @@ bool SplitGeometry(int argc, char* argv[])
 		// Save
 		cout << "Ng_OCC_Save_BREP" << endl;
 		Ng_OCC_Save_BREP(occ_geom, argv[3]);
+		//
+		if (!WriteSplitSolidOrigins(inputShape, argv[3]))
+		{
+			cerr << "The solids the split gave back could not be traced to the solids it was given." << endl;
+			return 1;
+		}
 		//
 		cout << "Split geometry finished successfully: " << numOfFacesAfter - numOfFacesBefore
 		     << " faces were added." << endl;

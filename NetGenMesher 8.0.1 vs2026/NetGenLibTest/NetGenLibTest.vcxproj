@@ -67,7 +67,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>nglib.lib;TKernel.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>nglib.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ProgramDatabaseFile>$(IntDir)$(TargetName).pdb</ProgramDatabaseFile>
       <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
@@ -94,7 +94,7 @@ call "$(SolutionDir)..\copy_runtime_dlls.bat" "$(SolutionDir).." "$(OutDir)"</Co
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>nglib.lib;TKernel.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>nglib.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ProgramDatabaseFile>$(IntDir)$(TargetName).pdb</ProgramDatabaseFile>
       <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
