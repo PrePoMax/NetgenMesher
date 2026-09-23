@@ -130,7 +130,7 @@ public:
    int check_overlapping_boundary;     //!< Check for overlapping surface elements before volume meshing
 
    int parallel_meshing_threads;       //!< Positive OCC meshing worker count: 1 = serial, >1 = parallel
-   int transfinite_faces;              //!< Mesh four sided OCC faces with matching opposite segment counts as structured grids
+   int transfinite_faces;              //!< Four sided OCC faces meshed as structured grids: 0 none, 1 those not much finer than the mesh size, 2 all
    double transfinite_angle;           //!< Degrees: a vertex is a corner of a transfinite face where its edges meet at less than this
 
 

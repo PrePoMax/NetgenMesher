@@ -28,12 +28,14 @@ namespace netgen
      transfinite interpolation in the parameter space of the face, and each grid
      cell is split into two triangles across its shorter diagonal.  Returns
      false, leaving result empty, when the face does not qualify or the grid
-     comes out folded, so the caller can mesh it the usual way.
+     comes out folded, so the caller can mesh it the usual way.  With
+     check_size also when the grid has much more triangles than the mesh size
+     asks for, since a grid cannot coarsen away from a finely divided side.
 
      Reads mesh and geom only, so faces can be built on worker threads.
   */
   bool BuildTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh,
-    int facenr, double corner_angle, OCCTransfiniteFaceMesh & result);
+    int facenr, double corner_angle, bool check_size, OCCTransfiniteFaceMesh & result);
 
   /**
      Splits the wire of face facenr at its corners, in the sense of

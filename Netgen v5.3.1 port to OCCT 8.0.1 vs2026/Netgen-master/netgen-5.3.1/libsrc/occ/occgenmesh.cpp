@@ -958,7 +958,8 @@ namespace netgen
 			if (mparam.transfinite_faces)
 			{
 				OCCTransfiniteFaceMesh face_mesh;
-				if (BuildTransfiniteFaceMesh(geom, mesh, k, mparam.transfinite_angle, face_mesh))
+				if (BuildTransfiniteFaceMesh(geom, mesh, k, mparam.transfinite_angle,
+					mparam.transfinite_faces == 1, face_mesh))
 				{
 					PrintMessage(2, "Face ", k, " / ", mesh.GetNFD(), " (transfinite)");
 					AddTransfiniteFaceMesh(mesh, face_mesh);
@@ -1505,7 +1506,8 @@ namespace netgen
 		if (mparam.transfinite_faces)
 		{
 			OCCTransfiniteFaceMesh face_mesh;
-			if (BuildTransfiniteFaceMesh(geom, source, facenr, mparam.transfinite_angle, face_mesh))
+			if (BuildTransfiniteFaceMesh(geom, source, facenr, mparam.transfinite_angle,
+				mparam.transfinite_faces == 1, face_mesh))
 			{
 				result.points.swap(face_mesh.points);
 				result.elements.swap(face_mesh.elements);

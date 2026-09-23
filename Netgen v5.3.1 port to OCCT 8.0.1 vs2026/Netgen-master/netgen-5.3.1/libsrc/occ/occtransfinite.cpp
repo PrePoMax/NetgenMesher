@@ -16,6 +16,10 @@ namespace netgen
 	// A grid with a triangle sharper than this is left to the advancing front.
 	static const double transfinite_min_angle = 5. * M_PI / 180.;
 
+	// A grid with more than this many times the triangles the mesh size asks
+	// for is left to the advancing front.
+	static const double transfinite_max_excess = 1.5;
+
 
 	struct TransfiniteSide
 	{
@@ -225,7 +229,7 @@ namespace netgen
 
 
 	bool BuildTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh,
-		int facenr, double corner_angle, OCCTransfiniteFaceMesh & result)
+		int facenr, double corner_angle, bool check_size, OCCTransfiniteFaceMesh & result)
 	{
 		result.points.clear();
 		result.elements.clear();
@@ -417,6 +421,37 @@ namespace netgen
 					result.elements.push_back(element);
 				}
 			}
+
+		if (check_size)
+		{
+			// The advancing front coarsens from the boundary towards the mesh size
+			// inside the face, which a grid cannot: a finely divided stretch of a side
+			// runs across the whole face as a row of small cells.  The mesh size asks
+			// for about an equilateral triangle of the local size per unit of area,
+			// and never fewer triangles than it takes to fill the boundary.
+			const double face_maxh = geom.face_maxh[facenr - 1];
+			double wanted = 0;
+			for (size_t k = 0; k < result.elements.size(); k++)
+			{
+				Point<3> p[3];
+				for (int v = 0; v < 3; v++)
+				{
+					const int pnum = result.elements[k].PNum(v + 1);
+					p[v] = pnum < 0 ? Point<3>(result.points[-pnum - 1]) : Point<3>(mesh.Point(pnum));
+				}
+				const Point<3> centre = Center(p[0], p[1], p[2]);
+				const double h = min(face_maxh, mesh.GetH(Point3d(centre(0), centre(1), centre(2))));
+				const double area = 0.5 * Cross(p[1] - p[0], p[2] - p[0]).Length();
+				wanted += area / (sqrt(3.) / 4 * h * h);
+			}
+			wanted = max(wanted, double(nseg - 2));
+			if (result.elements.size() > transfinite_max_excess * wanted)
+			{
+				result.points.clear();
+				result.elements.clear();
+				return false;
+			}
+		}
 
 		return true;
 	}
