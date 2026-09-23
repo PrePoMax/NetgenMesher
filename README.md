@@ -34,7 +34,11 @@ returns a shape whether or not it made the cut. Beside the result it writes `<ou
 solid of the result in explorer order, holding the number of the input solid that piece came from (counted
 the same way, 0 if none holds it). A split only divides solids, so each piece lies inside exactly one input
 solid; a point found just inside the piece is classified against the input solids to name it. PrePoMax reads
-the file to keep what it knew about a solid - its sub part, its color - on the pieces it became. Run the
+the file to keep what it knew about a solid - its sub part, its color - on the pieces it became. `BREP_SPLIT_PREVIEW` takes the same arguments with an edges file in place of the output brep: it
+splits the same way and writes only the edges the split made, each as `Edge: <n>` followed by n lines of
+`x y z` sampled on it, and saves no result. An edge of the result is left out when it is an edge of the input,
+or when points sampled inside it lie on the input edges - a piece of an edge the tool crossed is the same
+curve cut shorter - so what remains is the outline of the cut. PrePoMax draws it as the preview of a split. Run the
 executable with no arguments for the full grammar.
 
 `BREP_MESH` reads two optional entries after `parallel_meshing_threads` in the mesh parameters file.

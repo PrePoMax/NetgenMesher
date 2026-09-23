@@ -25,6 +25,13 @@
 #include "TopExp_Explorer.hxx"
 #include "gp_Pnt2d.hxx"
 #include "Precision.hxx"
+#include "TopExp.hxx"
+#include "TopoDS_Edge.hxx"
+#include "BRep_Tool.hxx"
+#include "BRepAdaptor_Curve.hxx"
+#include "BRepBuilderAPI_MakeVertex.hxx"
+#include "BRepExtrema_DistShapeShape.hxx"
+#include "GCPnts_TangentialDeflection.hxx"
 
 #include "windows.h"
 //#include "nglib.h"
@@ -56,7 +63,7 @@ bool OccVisualization(int argc, char* argv[]);
 bool ScaleGeometry(int argc, char* argv[]);
 bool ReverseBrepFaceOrientations(int argc, char* argv[]);
 bool SplitAFaceUsingTwoPoints(int argc, char* argv[]);
-bool SplitGeometry(int argc, char* argv[]);
+bool SplitGeometry(int argc, char* argv[], bool preview);
 bool RemoveSolids(int argc, char* argv[]);
 bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
@@ -151,7 +158,8 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_SCALE_GEOMETRY") == 0) return ScaleGeometry(argc, argv);
 	else if (strcmp(argv[1], "BREP_REVERSE_FACES") == 0) return ReverseBrepFaceOrientations(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT_A_FACE_USING_TWO_POINTS") == 0) return SplitAFaceUsingTwoPoints(argc, argv);
-	else if (strcmp(argv[1], "BREP_SPLIT") == 0) return SplitGeometry(argc, argv);
+	else if (strcmp(argv[1], "BREP_SPLIT") == 0) return SplitGeometry(argc, argv, false);
+	else if (strcmp(argv[1], "BREP_SPLIT_PREVIEW") == 0) return SplitGeometry(argc, argv, true);
 	else if (strcmp(argv[1], "BREP_REMOVE_SOLIDS") == 0) return RemoveSolids(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT_CLOSED_FACES") == 0) return SplitClosedFaces(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
@@ -287,6 +295,10 @@ void PrintUsage(const char* exePath)
 	cout << "      The extent is the box the tool has to cover, so that one tool is the" << endl;
 	cout << "      same for every part it is applied to.  Face and edge ids are read from" << endl;
 	cout << "      the source file when one is given, otherwise from the input file." << endl;
+	cout << "  BREP_SPLIT_PREVIEW                 <in.brep> <out.edges> <toolDefinition>" << endl;
+	cout << "      Splits as BREP_SPLIT does and writes only the edges the split made," << endl;
+	cout << "      each as a line Edge: <n> followed by n lines of x y z on it, instead" << endl;
+	cout << "      of the result" << endl;
 	cout << "  BREP_SPLIT_CLOSED_FACES            <in.brep> <out.brep> [maxSplitFaces]" << endl;
 	cout << "      Divides every closed face of the whole shape, the way the parts of" << endl;
 	cout << "      an assembly are divided when they are written out, so that a shape" << endl;
@@ -827,7 +839,90 @@ static bool WriteSplitSolidOrigins(const TopoDS_Shape & inputShape, const char *
 	//
 	return true;
 }
-bool SplitGeometry(int argc, char* argv[])
+// An edge of a split lies on the edges the shape already had when every point sampled inside it does. A
+// piece of an edge the tool crossed is the same curve cut shorter, so its points lie on the edge it came
+// from, while an edge the tool made runs across faces and meets the old edges only at its ends.
+static bool EdgeLiesOnEdges(const TopoDS_Edge & edge, const TopTools_IndexedMapOfShape & edges,
+                            const vector<Bnd_Box> & edgeBoxes, double tolerance)
+{
+	BRepAdaptor_Curve curve(edge);
+	double first = curve.FirstParameter();
+	double last = curve.LastParameter();
+	const double fractions[3] = { 0.5, 0.25, 0.75 };
+	//
+	for (double fraction : fractions)
+	{
+		gp_Pnt point = curve.Value(first + (last - first) * fraction);
+		TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(point);
+		bool onEdge = false;
+		for (int i = 1; i <= edges.Extent() && !onEdge; i++)
+		{
+			if (edgeBoxes[i - 1].IsOut(point)) continue;
+			//
+			const TopoDS_Edge & oldEdge = TopoDS::Edge(edges(i));
+			BRepExtrema_DistShapeShape distance(vertex, oldEdge);
+			if (distance.IsDone() && distance.Value() <= tolerance + BRep_Tool::Tolerance(edge) +
+			                                             BRep_Tool::Tolerance(oldEdge))
+				onEdge = true;
+		}
+		if (!onEdge) return false;
+	}
+	return true;
+}
+// The edges a split made, each written as a polyline of points on it, so that the caller can show where
+// the tool will cut without taking the result in. An edge the shape had before, whole or cut shorter, is
+// left out.
+static bool WriteSplitPreviewEdges(const TopTools_IndexedMapOfShape & facesBefore,
+                                   const TopTools_IndexedMapOfShape & facesAfter, const char * fileName)
+{
+	TopTools_IndexedMapOfShape edgesBefore;
+	TopTools_IndexedMapOfShape edgesAfter;
+	for (int i = 1; i <= facesBefore.Extent(); i++) TopExp::MapShapes(facesBefore(i), TopAbs_EDGE, edgesBefore);
+	for (int i = 1; i <= facesAfter.Extent(); i++) TopExp::MapShapes(facesAfter(i), TopAbs_EDGE, edgesAfter);
+	//
+	Bnd_Box shapeBox;
+	for (int i = 1; i <= facesAfter.Extent(); i++) BRepBndLib::Add(facesAfter(i), shapeBox);
+	if (shapeBox.IsVoid()) return false;
+	double diagonal = sqrt(shapeBox.SquareExtent());
+	double tolerance = 1e-7 * diagonal;
+	//
+	vector<Bnd_Box> edgeBoxes(edgesBefore.Extent());
+	for (int i = 1; i <= edgesBefore.Extent(); i++)
+	{
+		BRepBndLib::Add(edgesBefore(i), edgeBoxes[i - 1]);
+		edgeBoxes[i - 1].Enlarge(tolerance + BRep_Tool::Tolerance(TopoDS::Edge(edgesBefore(i))));
+	}
+	//
+	ofstream file(fileName);
+	if (!file) return false;
+	file.precision(15);
+	file << "Split preview format: 1" << endl;
+	//
+	int numOfEdges = 0;
+	for (int i = 1; i <= edgesAfter.Extent(); i++)
+	{
+		const TopoDS_Edge & edge = TopoDS::Edge(edgesAfter(i));
+		if (BRep_Tool::Degenerated(edge) || edgesBefore.Contains(edge)) continue;
+		if (EdgeLiesOnEdges(edge, edgesBefore, edgeBoxes, tolerance)) continue;
+		//
+		BRepAdaptor_Curve curve(edge);
+		GCPnts_TangentialDeflection points(curve, 0.1, 1e-3 * diagonal);
+		if (points.NbPoints() < 2) continue;
+		//
+		file << "Edge: " << points.NbPoints() << endl;
+		for (int j = 1; j <= points.NbPoints(); j++)
+		{
+			gp_Pnt point = points.Value(j);
+			file << point.X() << " " << point.Y() << " " << point.Z() << endl;
+		}
+		numOfEdges++;
+	}
+	file.close();
+	//
+	cout << "Split preview finished successfully: " << numOfEdges << " edges were made." << endl;
+	return true;
+}
+bool SplitGeometry(int argc, char* argv[], bool preview)
 {
 	try
 	{
@@ -858,6 +953,10 @@ bool SplitGeometry(int argc, char* argv[])
 		//
 		Ng_OCC_GetFMap(occ_geom, occ_fmap);
 		int numOfFacesBefore = FMap.Extent();
+		// The splitter leaves its arguments as they were, so the faces of the shape stay what a preview
+		// compares the result with
+		TopTools_IndexedMapOfShape facesBefore;
+		facesBefore.Assign(FMap);
 		// Read the tool definition
 		ifstream toolFile(argv[4]);
 		if (!toolFile)
@@ -1053,6 +1152,16 @@ bool SplitGeometry(int argc, char* argv[])
 		{
 			cerr << "The splitting tool did not split the geometry." << endl;
 			return 1;
+		}
+		//
+		if (preview)
+		{
+			if (!WriteSplitPreviewEdges(facesBefore, FMap, argv[3]))
+			{
+				cerr << "The edges the split made could not be written." << endl;
+				return 1;
+			}
+			return 0;
 		}
 		// Save
 		cout << "Ng_OCC_Save_BREP" << endl;
