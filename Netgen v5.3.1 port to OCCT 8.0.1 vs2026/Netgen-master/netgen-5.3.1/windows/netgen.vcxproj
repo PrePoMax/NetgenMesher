@@ -803,6 +803,7 @@
     <ClCompile Include="..\libsrc\occ\occgenmesh.cpp" />
     <ClCompile Include="..\libsrc\occ\occgeom.cpp" />
     <ClCompile Include="..\libsrc\occ\occmeshsurf.cpp" />
+    <ClCompile Include="..\libsrc\occ\occtransfinite.cpp" />
     <ClCompile Include="..\libsrc\occ\occpkg.cpp" />
     <ClCompile Include="..\libsrc\occ\Partition_Inter2d.cxx" />
     <ClCompile Include="..\libsrc\occ\Partition_Inter3d.cxx" />

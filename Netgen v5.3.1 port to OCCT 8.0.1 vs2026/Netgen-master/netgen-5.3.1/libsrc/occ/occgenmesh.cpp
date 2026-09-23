@@ -5,6 +5,7 @@
 #include <occgeom.hpp>
 #include <meshing.hpp>
 #include "occparallel.hpp"
+#include "occtransfinite.hpp"
 
 #include <vector>
 
@@ -691,6 +692,23 @@ namespace netgen
 
 
 
+	static void AddTransfiniteFaceMesh(Mesh & mesh, const OCCTransfiniteFaceMesh & face_mesh)
+	{
+		const int point_base = mesh.GetNP();
+		for (size_t i = 0; i < face_mesh.points.size(); i++)
+			mesh.AddPoint(face_mesh.points[i], face_mesh.points[i].GetLayer(), face_mesh.points[i].Type());
+
+		for (size_t i = 0; i < face_mesh.elements.size(); i++)
+		{
+			Element2d element = face_mesh.elements[i];
+			for (int j = 1; j <= element.GetNP(); j++)
+				if (int(element.PNum(j)) < 0)
+					element.PNum(j) = point_base - int(element.PNum(j));
+			mesh.AddSurfaceElement(element);
+		}
+	}
+
+
 	static void OCCMeshSurfaceSerial(OCCGeometry & geom, Mesh & mesh, int perfstepsend)
 	{
 		int i, j, k;
@@ -714,6 +732,10 @@ namespace netgen
 		int notrys = 1;
 
 		int surfmesherror = 0;
+
+		// Structured faces are kept out of the surface optimisation, which would
+		// swap and smooth the grid away.
+		std::vector<char> transfinite_face(mesh.GetNFD() + 1, 0);
 
 		for (k = 1; k <= mesh.GetNFD(); k++)
 		{
@@ -739,6 +761,19 @@ namespace netgen
 
 
 			FaceDescriptor & fd = mesh.GetFaceDescriptor(k);
+
+			if (mparam.transfinite_faces)
+			{
+				OCCTransfiniteFaceMesh face_mesh;
+				if (BuildTransfiniteFaceMesh(geom, mesh, k, mparam.transfinite_angle, face_mesh))
+				{
+					PrintMessage(2, "Face ", k, " / ", mesh.GetNFD(), " (transfinite)");
+					AddTransfiniteFaceMesh(mesh, face_mesh);
+					geom.facemeshstatus[k - 1] = 1;
+					transfinite_face[k] = 1;
+					continue;
+				}
+			}
 
 			int oldnf = mesh.GetNSE();
 
@@ -997,6 +1032,9 @@ namespace netgen
 
 			FaceDescriptor & fd = mesh.GetFaceDescriptor(k);
 
+			if (transfinite_face[k])
+				continue;
+
 			PrintMessage(1, "Optimize Surface ", k);
 			for (i = 1; i <= mparam.optsteps2d; i++)
 			{
@@ -1073,12 +1111,13 @@ namespace netgen
 		std::vector<LocalHRestriction> restrictions;
 		bool success;
 		bool retried;
+		bool transfinite;
 		int projection_type;
 		int error_type;
 		std::string error_message;
 
 		OCCFaceMeshResult()
-			: success(false), retried(false), projection_type(PARAMETERSPACE), error_type(0)
+			: success(false), retried(false), transfinite(false), projection_type(PARAMETERSPACE), error_type(0)
 		{
 		}
 	};
@@ -1270,6 +1309,19 @@ namespace netgen
 		const Box<3> & geometry_box, int facenr, int perfstepsend,
 		double starttime, OCCFaceMeshResult & result)
 	{
+		if (mparam.transfinite_faces)
+		{
+			OCCTransfiniteFaceMesh face_mesh;
+			if (BuildTransfiniteFaceMesh(geom, source, facenr, mparam.transfinite_angle, face_mesh))
+			{
+				result.points.swap(face_mesh.points);
+				result.elements.swap(face_mesh.elements);
+				result.transfinite = true;
+				result.success = true;
+				return;
+			}
+		}
+
 		MeshingParameters face_mp;
 		face_mp.CopyFrom(mparam);
 		face_mp.checkoverlap = 0;
@@ -1382,7 +1434,9 @@ namespace netgen
 			geom.facemeshstatus[face_index] = 1;
 			if (result.retried)
 				cout << "retry Surface " << facenr << endl;
-			if (result.projection_type == PLANESPACE)
+			if (result.transfinite)
+				PrintMessage(2, "Face ", facenr, " / ", face_count, " (transfinite)");
+			else if (result.projection_type == PLANESPACE)
 				PrintMessage(2, "Face ", facenr, " / ", face_count,
 					" (plane space projection)");
 			else

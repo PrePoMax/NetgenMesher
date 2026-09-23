@@ -211,6 +211,7 @@
     <ClCompile Include="..\libsrc\occ\occgenmesh.cpp" />
     <ClCompile Include="..\libsrc\occ\occgeom.cpp" />
     <ClCompile Include="..\libsrc\occ\occmeshsurf.cpp" />
+    <ClCompile Include="..\libsrc\occ\occtransfinite.cpp" />
     <ClCompile Include="..\libsrc\general\optmem.cpp" />
     <ClCompile Include="..\libsrc\meshing\parallelmesh.cpp" />
     <ClCompile Include="..\libsrc\meshing\paralleltop.cpp" />
@@ -371,6 +372,7 @@
     <ClInclude Include="..\libsrc\include\occgeom.hpp" />
     <ClInclude Include="..\libsrc\occ\occmeshsurf.hpp" />
     <ClInclude Include="..\libsrc\occ\occparallel.hpp" />
+    <ClInclude Include="..\libsrc\occ\occtransfinite.hpp" />
     <ClInclude Include="..\libsrc\include\opti.hpp" />
     <ClInclude Include="..\libsrc\linalg\opti.hpp" />
     <ClInclude Include="..\libsrc\general\optmem.hpp" />

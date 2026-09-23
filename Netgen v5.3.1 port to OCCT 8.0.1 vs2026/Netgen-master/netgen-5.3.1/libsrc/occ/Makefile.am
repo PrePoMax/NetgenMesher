@@ -23,7 +23,7 @@ endif
 
 libocc_la_SOURCES = Partition_Inter2d.cxx Partition_Inter3d.cxx \
 	Partition_Loop.cxx Partition_Loop2d.cxx Partition_Loop3d.cxx Partition_Spliter.cxx \
-	occconstruction.cpp occgenmesh.cpp occgeom.cpp occmeshsurf.cpp
+	occconstruction.cpp occgenmesh.cpp occgeom.cpp occmeshsurf.cpp occtransfinite.cpp
 
 libocc_la_LIBADD = $(OCCLIBS)
 

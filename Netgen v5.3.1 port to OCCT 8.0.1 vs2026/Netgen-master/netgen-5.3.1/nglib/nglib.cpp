@@ -2885,6 +2885,8 @@ namespace nglib
 		check_overlap = 1;
 		check_overlapping_boundary = 1;
 		parallel_meshing_threads = 1;
+		transfinite_faces = 0;
+		transfinite_angle = 135;
 	}
 
 
@@ -2927,6 +2929,8 @@ namespace nglib
 		check_overlap = 1;
 		check_overlapping_boundary = 1;
 		parallel_meshing_threads = 1;
+		transfinite_faces = 0;
+		transfinite_angle = 135;
 	}
 
 
@@ -2958,6 +2962,8 @@ namespace nglib
 		mparam.checkoverlap = check_overlap;
 		mparam.checkoverlappingboundary = check_overlapping_boundary;
 		mparam.parallel_meshing_threads = parallel_meshing_threads > 0 ? parallel_meshing_threads : 1;
+		mparam.transfinite_faces = transfinite_faces;
+		mparam.transfinite_angle = transfinite_angle;
 	}
 	// ------------------ End - Meshing Parameters related functions --------------------
 

@@ -1064,6 +1064,10 @@ namespace netgen
     int parthread;
     /// positive number of meshing threads (1 = serial, greater than 1 = parallel)
     int parallel_meshing_threads;
+    /// mesh four sided OCC faces with matching opposite segment counts as structured grids
+    int transfinite_faces;
+    /// a vertex is a corner of a transfinite face where its edges meet at less than this angle (degrees)
+    double transfinite_angle;
     /// weight of element size w.r.t element shape
     double elsizeweight;
     /// init with default values

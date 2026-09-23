@@ -1856,6 +1856,14 @@ Ng_Meshing_Parameters ReadParameters(const char *fileName, double &deflection)
 				throw std::invalid_argument("parallel_meshing_threads must be larger than 0.");
 			mp.parallel_meshing_threads = threadCount;
 		}
+		// Optional switch: 1 = mesh four sided faces with matching opposite segment
+		// counts as structured triangle grids, 0 = advancing front everywhere.
+		if (getline(File, line) && getline(File, line) && !line.empty())
+			mp.transfinite_faces = std::stoi(line);
+		// Optional corner threshold of transfinite faces in degrees: a vertex is a
+		// corner where its edges meet at less than this angle.
+		if (getline(File, line) && getline(File, line) && !line.empty())
+			mp.transfinite_angle = std::stod(line);
 		//
 		File.close();
 	}

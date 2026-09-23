@@ -32,6 +32,16 @@ surface. Face and edge ids are read from `Source file` when one is given, which 
 geometry split another. The command reports a failure when the tool added no faces, since the modelling kernel
 returns a shape whether or not it made the cut. Run the executable with no arguments for the full grammar.
 
+`BREP_MESH` reads two optional entries after `parallel_meshing_threads` in the mesh parameters file.
+`transfinite_faces` set to 1 meshes every 4-sided face as a structured triangle grid when the edge
+meshing already put the same number of segments on its opposite sides; `transfinite_angle` (135 by
+default, as in Gmsh) is the angle below which the edges meeting at a vertex make a corner, so a face
+with a flatter corner is not 4-sided. The interior nodes are placed by transfinite interpolation in
+the parameter space of the face, and those faces skip the surface optimisation so the grid stays
+structured. A face that does not qualify, or whose grid would come out folded, is meshed as before.
+The segment counts are not yet made to match across neighbouring faces, so whether a face comes out
+structured depends on how its edges happened to be divided.
+
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).

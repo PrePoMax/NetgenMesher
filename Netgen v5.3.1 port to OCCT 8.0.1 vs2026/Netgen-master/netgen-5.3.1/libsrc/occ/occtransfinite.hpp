@@ -1,0 +1,39 @@
+#ifndef FILE_OCCTRANSFINITE
+#define FILE_OCCTRANSFINITE
+
+#include <vector>
+
+namespace netgen
+{
+  /**
+     Structured triangulation of a four sided face.
+
+     Points follow the convention of the parallel face results: an element
+     vertex that is already in the mesh keeps its number, a new point is
+     referenced as -(1 based index into points).
+  */
+  struct OCCTransfiniteFaceMesh
+  {
+    std::vector<MeshPoint> points;
+    std::vector<Element2d> elements;
+  };
+
+  /**
+     Meshes face facenr as a transfinite region if it is one.
+
+     The face qualifies when it has a single wire with exactly four corners -
+     vertices where the edges meet at less than corner_angle degrees, 180 being
+     a straight continuation - and the edge meshing already put the same number
+     of segments on opposite sides.  The interior nodes are placed by
+     transfinite interpolation in the parameter space of the face, and each grid
+     cell is split into two triangles across its shorter diagonal.  Returns
+     false, leaving result empty, when the face does not qualify or the grid
+     comes out folded, so the caller can mesh it the usual way.
+
+     Reads mesh and geom only, so faces can be built on worker threads.
+  */
+  bool BuildTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh,
+    int facenr, double corner_angle, OCCTransfiniteFaceMesh & result);
+}
+
+#endif
