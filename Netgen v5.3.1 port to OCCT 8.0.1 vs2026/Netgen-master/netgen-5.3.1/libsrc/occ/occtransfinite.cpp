@@ -143,6 +143,78 @@ namespace netgen
 	}
 
 
+	// Unit tangent of the edge where the wire enters it (at_end false) or
+	// leaves it, pointing along the wire.
+	static bool WireEdgeTangent(const TopoDS_Edge & edge, bool at_end, gp_Vec & t)
+	{
+		BRepAdaptor_Curve curve(edge);
+		const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+		gp_Pnt p;
+		curve.D1(at_end != reversed ? curve.LastParameter() : curve.FirstParameter(), p, t);
+		if (reversed)
+			t.Reverse();
+		if (t.Magnitude() <= gp::Resolution())
+			return false;
+		t.Normalize();
+		return true;
+	}
+
+
+	void CollectTransfiniteEdgePairs(const OCCGeometry & geom, int facenr,
+		double corner_angle, std::vector<std::pair<int, int> > & pairs)
+	{
+		const TopoDS_Face face = TopoDS::Face(geom.fmap(facenr));
+
+		TopoDS_Wire wire;
+		int wires = 0;
+		for (TopExp_Explorer exp(face, TopAbs_WIRE); exp.More(); exp.Next())
+		{
+			wire = TopoDS::Wire(exp.Current());
+			wires++;
+		}
+		if (wires != 1)
+			return;
+
+		int wire_edges = 0;
+		for (TopExp_Explorer exp(wire, TopAbs_EDGE); exp.More(); exp.Next())
+			wire_edges++;
+		if (wire_edges != 4)
+			return;
+
+		// the wire explorer gives the edges head to tail, a seam twice
+		std::vector<TopoDS_Edge> edges;
+		for (BRepTools_WireExplorer exp(wire, face); exp.More(); exp.Next())
+		{
+			const TopoDS_Edge & edge = exp.Current();
+			if (BRep_Tool::Degenerated(edge))
+				return;
+			edges.push_back(edge);
+		}
+		if (edges.size() != 4)
+			return;
+
+		const double corner_turn = M_PI - corner_angle * M_PI / 180.;
+		for (int k = 0; k < 4; k++)
+		{
+			gp_Vec t_in, t_out;
+			if (!WireEdgeTangent(edges[k], true, t_in) || !WireEdgeTangent(edges[(k + 1) % 4], false, t_out))
+				return;
+			if (t_in.Angle(t_out) <= corner_turn)
+				return;
+		}
+
+		int edgenr[4];
+		for (int k = 0; k < 4; k++)
+		{
+			edgenr[k] = geom.emap.FindIndex(edges[k]);
+			if (edgenr[k] < 1)
+				return;
+		}
+		pairs.push_back(std::make_pair(edgenr[0], edgenr[2]));
+		pairs.push_back(std::make_pair(edgenr[1], edgenr[3]));
+	}
+
+
 	bool BuildTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh,
 		int facenr, double corner_angle, OCCTransfiniteFaceMesh & result)
 	{

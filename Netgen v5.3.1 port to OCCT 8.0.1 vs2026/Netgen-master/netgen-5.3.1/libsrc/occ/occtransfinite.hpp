@@ -1,6 +1,7 @@
 #ifndef FILE_OCCTRANSFINITE
 #define FILE_OCCTRANSFINITE
 
+#include <utility>
 #include <vector>
 
 namespace netgen
@@ -34,6 +35,16 @@ namespace netgen
   */
   bool BuildTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh,
     int facenr, double corner_angle, OCCTransfiniteFaceMesh & result);
+
+  /**
+     Appends the two pairs of opposite edges of face facenr - as edge map
+     numbers - when the face is bounded by exactly four edges that meet at four
+     corners, in the sense of BuildTransfiniteFaceMesh.  The edge meshing gives
+     each pair one segment count so that the face qualifies as a structured
+     grid.  A face whose sides are made of several edges adds nothing.
+  */
+  void CollectTransfiniteEdgePairs(const OCCGeometry & geom, int facenr,
+    double corner_angle, std::vector<std::pair<int, int> > & pairs);
 }
 
 #endif

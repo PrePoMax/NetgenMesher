@@ -242,8 +242,10 @@ namespace netgen
 
 
 
+	// With segments > 0 the edge gets that many segments, spaced as the local
+	// mesh size would space them, instead of the number the mesh size asks for.
 	void DivideEdge(const TopoDS_Edge & edge, Array<MeshPoint> & ps,
-		Array<double> & params, const Mesh & mesh, int & status)
+		Array<double> & params, const Mesh & mesh, int & status, int segments = 0)
 	{
 		status = 0;
 		double s0, s1;
@@ -284,6 +286,30 @@ namespace netgen
 
 		//  nsubedges = int(ceil(hvalue[DIVIDEEDGESECTIONS]));
 		nsubedges = max(1, int(floor(hvalue[DIVIDEEDGESECTIONS] + 0.5)));
+
+		// A forced count may be denser than the sections, so the points are
+		// interpolated within them rather than put on the section ends.
+		if (segments > 0)
+		{
+			ps.SetSize(segments - 1);
+			params.SetSize(segments + 1);
+			params[0] = s0;
+			params[segments] = s1;
+
+			int section = 1;
+			for (int i = 1; i < segments; i++)
+			{
+				const double target = hvalue[DIVIDEEDGESECTIONS] * i / segments;
+				while (section < DIVIDEEDGESECTIONS && hvalue[section] < target)
+					section++;
+				const double dh = hvalue[section] - hvalue[section - 1];
+				const double fraction = dh > 0 ? (target - hvalue[section - 1]) / dh : 1;
+				params[i] = s0 + ((section - 1 + fraction) / DIVIDEEDGESECTIONS) * (s1 - s0);
+				pnt = c->Value(params[i]);
+				ps[i - 1] = MeshPoint(Point3d(pnt.X(), pnt.Y(), pnt.Z()));
+			}
+			return;
+		}
 
 		ps.SetSize(nsubedges - 1);
 		params.SetSize(nsubedges + 1);
@@ -354,6 +380,89 @@ namespace netgen
 				found = pi;
 		}
 		return found;
+	}
+
+
+	// An edge of a chain is not made finer than this many times the segment
+	// count its own mesh size asks for, plus one.
+	static const int transfinite_max_refinement = 2;
+
+
+	// Gives the opposite edges of every face bounded by four edges one segment
+	// count, so the surface meshing can mesh the face as a structured grid.
+	// Opposite edges are linked across faces into chains, and every edge of a
+	// chain gets the largest count in it.  A chain that would make one of its
+	// edges much finer than its mesh size asks for is left as it is.
+	static void MatchTransfiniteEdgeCounts(const OCCGeometry & geom, const Mesh & mesh,
+		const std::vector<TopoDS_Edge> & edges, std::vector<OCCEdgeDiscretization> & results,
+		OCCParallelMeshingContext & parallel)
+	{
+		const int nedges = int(edges.size());
+
+		std::vector<std::pair<int, int> > pairs;
+		for (int facenr = 1; facenr <= geom.fmap.Extent(); facenr++)
+			CollectTransfiniteEdgePairs(geom, facenr, mparam.transfinite_angle, pairs);
+
+		std::vector<int> parent(nedges);
+		for (int i = 0; i < nedges; i++)
+			parent[i] = i;
+		auto root_of = [&parent](int i)
+		{
+			while (parent[i] != i)
+				i = parent[i] = parent[parent[i]];
+			return i;
+		};
+
+		for (size_t k = 0; k < pairs.size(); k++)
+		{
+			const int a = pairs[k].first - 1, b = pairs[k].second - 1;
+			if (results[a].skip || results[b].skip)
+				continue;
+			parent[root_of(a)] = root_of(b);
+		}
+
+		std::vector<int> min_count(nedges, 0), max_count(nedges, 0);
+		for (int i = 0; i < nedges; i++)
+		{
+			if (results[i].skip)
+				continue;
+			const int root = root_of(i);
+			const int count = results[i].points.Size() + 1;
+			if (max_count[root] == 0 || count < min_count[root])
+				min_count[root] = count;
+			max_count[root] = max(max_count[root], count);
+		}
+
+		std::vector<int> redivide, forced(nedges, 0);
+		int rejected = 0;
+		for (int i = 0; i < nedges; i++)
+		{
+			if (results[i].skip)
+				continue;
+			const int root = root_of(i);
+			if (max_count[root] > transfinite_max_refinement * min_count[root] + 1)
+			{
+				if (i == root)
+					rejected++;
+				continue;
+			}
+			if (results[i].points.Size() + 1 != max_count[root])
+			{
+				forced[i] = max_count[root];
+				redivide.push_back(i);
+			}
+		}
+
+		parallel.ParallelFor(int(redivide.size()),
+			[&](int, int k)
+			{
+				const int i = redivide[k];
+				DivideEdge(edges[i], results[i].points, results[i].parameters, mesh,
+					results[i].status, forced[i]);
+			});
+
+		PrintMessage(3, "Transfinite faces: ", int(pairs.size() / 2), " candidates, ",
+			int(redivide.size()), " edges redivided, ", rejected, " chains left as they are");
 	}
 
 
@@ -472,6 +581,9 @@ namespace netgen
 
 				DivideEdge(edge, result.points, result.parameters, mesh, result.status);
 			});
+
+		if (mparam.transfinite_faces)
+			MatchTransfiniteEdgeCounts(geom, mesh, unique_edges, edge_results, parallel);
 
 		for (int i = 0; i < nedges; i++)
 		{

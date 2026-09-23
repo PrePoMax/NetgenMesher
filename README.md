@@ -39,8 +39,12 @@ default, as in Gmsh) is the angle below which the edges meeting at a vertex make
 with a flatter corner is not 4-sided. The interior nodes are placed by transfinite interpolation in
 the parameter space of the face, and those faces skip the surface optimisation so the grid stays
 structured. A face that does not qualify, or whose grid would come out folded, is meshed as before.
-The segment counts are not yet made to match across neighbouring faces, so whether a face comes out
-structured depends on how its edges happened to be divided.
+To make faces qualify, the edge meshing links the opposite edges of every face bounded by exactly four
+edges into chains across neighbouring faces, and divides every edge of a chain into the largest
+segment count in it, spaced as the local mesh size would space them. A chain that would make one of
+its edges more than about twice as fine as its mesh size asks for is left as it is. A face whose
+sides are made of several edges is not matched, and is structured only when its counts happen to
+agree.
 
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
