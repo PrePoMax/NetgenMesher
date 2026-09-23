@@ -26,9 +26,9 @@ namespace netgen
      a straight continuation - and the edge meshing already put the same number
      of segments on opposite sides.  The interior nodes are placed by
      transfinite interpolation in the parameter space of the face, and each grid
-     cell is split into two triangles across its shorter diagonal.  Returns
-     false, leaving result empty, when the face does not qualify or the grid
-     comes out folded, so the caller can mesh it the usual way.  With
+     cell is split into two triangles, the diagonals alternating from cell to
+     cell.  Returns false, leaving result empty, when the face does not qualify
+     or the grid comes out folded, so the caller can mesh it the usual way.  With
      check_size also when the grid has much more triangles than the mesh size
      asks for, since a grid cannot coarsen away from a finely divided side.
 

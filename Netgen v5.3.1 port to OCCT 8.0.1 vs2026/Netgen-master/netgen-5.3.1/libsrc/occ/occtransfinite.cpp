@@ -18,7 +18,7 @@ namespace netgen
 
 	// A grid with more than this many times the triangles the mesh size asks
 	// for is left to the advancing front.
-	static const double transfinite_max_excess = 1.5;
+	static const double transfinite_max_excess = 2;
 
 
 	struct TransfiniteSide
@@ -386,10 +386,11 @@ namespace netgen
 			for (int i = 0; i < n; i++)
 			{
 				const int k00 = j * nx + i, k10 = k00 + 1, k01 = k00 + nx, k11 = k01 + 1;
-				const bool short_diagonal_00 = Dist(xyz[k00], xyz[k11]) <= Dist(xyz[k10], xyz[k01]);
+				// the diagonals alternate from cell to cell, as Gmsh's AlternateLeft
+				const bool diagonal_00 = (i + j) % 2 == 0;
 				const int trigs[2][3] = {
-					{ k00, k10, short_diagonal_00 ? k11 : k01 },
-					{ short_diagonal_00 ? k00 : k10, k11, k01 } };
+					{ k00, k10, diagonal_00 ? k11 : k01 },
+					{ diagonal_00 ? k00 : k10, k11, k01 } };
 
 				for (int t = 0; t < 2; t++)
 				{

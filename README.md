@@ -43,11 +43,12 @@ same number of segments on their opposite sides: 0 none, 1 size checked - those 
 size check below - and 2 all that qualify; `transfinite_angle` (135 by default, as in Gmsh) is the
 angle below which the edges meeting at a vertex make a corner, so a face with a flatter corner is not
 4-sided. The interior nodes are placed by transfinite interpolation in the parameter space of the
-face, and those faces skip the surface optimisation so the grid stays structured. A face that does not
-qualify, or whose grid would come out folded, is meshed as before. With 1 so is a face whose grid
-would have more than 1.5 times the triangles the mesh size asks for there: the advancing front
-coarsens from a finely divided side towards the mesh size inside the face, while a grid carries that
-division across the whole face.
+face, each cell is split into two triangles with the diagonals alternating from cell to cell as in
+Gmsh's `AlternateLeft`, and those faces skip the surface optimisation so the grid stays structured. A
+face that does not qualify, or whose grid would come out folded, is meshed as before. With 1 so is a
+face whose grid would have more than twice the triangles the mesh size asks for there: the advancing
+front coarsens from a finely divided side towards the mesh size inside the face, while a grid carries
+that division across the whole face.
 To make faces qualify, the edge meshing splits the wire of every face with four corners into its four
 sides - each one edge or several - and raises segment counts until opposite sides add up to the same
 number, the segments a side lacks going one at a time to its edge that is least refined for its mesh
