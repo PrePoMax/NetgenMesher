@@ -383,86 +383,167 @@ namespace netgen
 	}
 
 
-	// An edge of a chain is not made finer than this many times the segment
-	// count its own mesh size asks for, plus one.
+	// An edge is not made finer than this many times the segment count its own
+	// mesh size asks for, plus one.
 	static const int transfinite_max_refinement = 2;
 
 
-	// Gives the opposite edges of every face bounded by four edges one segment
-	// count, so the surface meshing can mesh the face as a structured grid.
-	// Opposite edges are linked across faces into chains, and every edge of a
-	// chain gets the largest count in it.  A chain that would make one of its
-	// edges much finer than its mesh size asks for is left as it is.
+	struct TransfiniteFaceSides
+	{
+		std::vector<int> sides[4];
+	};
+
+
+	// Raises the counts until the opposite sides of every face add up to the
+	// same number.  The segments a side lacks go one by one to its edge that is
+	// least refined for its mesh size.  Returns false if an edge reached its
+	// limit first, with the faces left short marked in short_faces.
+	static bool BalanceTransfiniteSides(const std::vector<TransfiniteFaceSides> & faces,
+		const std::vector<char> & active, const std::vector<int> & own, const std::vector<int> & limit,
+		std::vector<int> & count, std::vector<char> & short_faces)
+	{
+		bool changed = true;
+		while (changed)
+		{
+			changed = false;
+			for (size_t f = 0; f < faces.size(); f++)
+			{
+				if (!active[f])
+					continue;
+				for (int q = 0; q < 2; q++)
+				{
+					const std::vector<int> * side[2] = { &faces[f].sides[q], &faces[f].sides[q + 2] };
+					int sum[2] = { 0, 0 };
+					for (int s = 0; s < 2; s++)
+						for (size_t k = 0; k < side[s]->size(); k++)
+							sum[s] += count[(*side[s])[k]];
+
+					const int low = sum[0] < sum[1] ? 0 : 1;
+					for (int missing = sum[1 - low] - sum[low]; missing > 0; missing--)
+					{
+						int best = -1;
+						for (size_t k = 0; k < side[low]->size(); k++)
+						{
+							const int i = (*side[low])[k];
+							if (count[i] >= limit[i])
+								continue;
+							if (best < 0 || double(own[i]) * count[best] > double(own[best]) * count[i])
+								best = i;
+						}
+						if (best < 0)
+							break;
+						count[best]++;
+						changed = true;
+					}
+				}
+			}
+		}
+
+		bool balanced = true;
+		for (size_t f = 0; f < faces.size(); f++)
+		{
+			short_faces[f] = 0;
+			if (!active[f])
+				continue;
+			for (int q = 0; q < 2; q++)
+			{
+				int sum[2] = { 0, 0 };
+				for (int s = 0; s < 2; s++)
+					for (size_t k = 0; k < faces[f].sides[q + 2 * s].size(); k++)
+						sum[s] += count[faces[f].sides[q + 2 * s][k]];
+				if (sum[0] != sum[1])
+					short_faces[f] = 1;
+			}
+			if (short_faces[f])
+				balanced = false;
+		}
+		return balanced;
+	}
+
+
+	// Gives the opposite sides of every face with four corners the same total
+	// segment count, so the surface meshing can mesh the face as a structured
+	// grid.  Counts are only raised, since a shared edge ties the faces around
+	// it together, and not past transfinite_max_refinement.  A face that cannot
+	// be balanced within that is dropped and the others are balanced again from
+	// the counts the mesh size asks for, so no edge is refined for a face that
+	// is not going to be structured.
 	static void MatchTransfiniteEdgeCounts(const OCCGeometry & geom, const Mesh & mesh,
 		const std::vector<TopoDS_Edge> & edges, std::vector<OCCEdgeDiscretization> & results,
 		OCCParallelMeshingContext & parallel)
 	{
 		const int nedges = int(edges.size());
 
-		std::vector<std::pair<int, int> > pairs;
+		std::vector<TransfiniteFaceSides> faces;
 		for (int facenr = 1; facenr <= geom.fmap.Extent(); facenr++)
-			CollectTransfiniteEdgePairs(geom, facenr, mparam.transfinite_angle, pairs);
-
-		std::vector<int> parent(nedges);
-		for (int i = 0; i < nedges; i++)
-			parent[i] = i;
-		auto root_of = [&parent](int i)
 		{
-			while (parent[i] != i)
-				i = parent[i] = parent[parent[i]];
-			return i;
-		};
-
-		for (size_t k = 0; k < pairs.size(); k++)
-		{
-			const int a = pairs[k].first - 1, b = pairs[k].second - 1;
-			if (results[a].skip || results[b].skip)
+			TransfiniteFaceSides face;
+			if (!CollectTransfiniteSides(geom, facenr, mparam.transfinite_angle, face.sides))
 				continue;
-			parent[root_of(a)] = root_of(b);
+
+			// edge map numbers to indices; a skipped edge has no segments to count
+			bool usable = true;
+			for (int q = 0; q < 4; q++)
+				for (size_t k = 0; k < face.sides[q].size(); k++)
+					if (results[--face.sides[q][k]].skip)
+						usable = false;
+			if (usable)
+				faces.push_back(face);
 		}
 
-		std::vector<int> min_count(nedges, 0), max_count(nedges, 0);
+		std::vector<int> own(nedges), limit(nedges), count(nedges);
 		for (int i = 0; i < nedges; i++)
 		{
-			if (results[i].skip)
-				continue;
-			const int root = root_of(i);
-			const int count = results[i].points.Size() + 1;
-			if (max_count[root] == 0 || count < min_count[root])
-				min_count[root] = count;
-			max_count[root] = max(max_count[root], count);
+			own[i] = results[i].points.Size() + 1;
+			limit[i] = transfinite_max_refinement * own[i] + 1;
 		}
 
-		std::vector<int> redivide, forced(nedges, 0);
-		int rejected = 0;
-		for (int i = 0; i < nedges; i++)
+		std::vector<char> active(faces.size(), 1), short_faces(faces.size(), 0);
+		std::vector<int> dropped;
+		for (;;)
 		{
-			if (results[i].skip)
-				continue;
-			const int root = root_of(i);
-			if (max_count[root] > transfinite_max_refinement * min_count[root] + 1)
+			count = own;
+			if (BalanceTransfiniteSides(faces, active, own, limit, count, short_faces))
+				break;
+			for (size_t f = 0; f < faces.size(); f++)
+				if (short_faces[f])
+				{
+					active[f] = 0;
+					dropped.push_back(int(f));
+				}
+		}
+
+		// A face is dropped with the neighbour that took a shared edge to its
+		// limit, so each is tried again on top of the balanced counts.
+		int restored = 0;
+		for (size_t k = 0; k < dropped.size(); k++)
+		{
+			const std::vector<int> balanced = count;
+			active[dropped[k]] = 1;
+			if (BalanceTransfiniteSides(faces, active, own, limit, count, short_faces))
+				restored++;
+			else
 			{
-				if (i == root)
-					rejected++;
-				continue;
+				active[dropped[k]] = 0;
+				count = balanced;
 			}
-			if (results[i].points.Size() + 1 != max_count[root])
-			{
-				forced[i] = max_count[root];
+		}
+
+		std::vector<int> redivide;
+		for (int i = 0; i < nedges; i++)
+			if (count[i] != own[i])
 				redivide.push_back(i);
-			}
-		}
 
 		parallel.ParallelFor(int(redivide.size()),
 			[&](int, int k)
 			{
 				const int i = redivide[k];
 				DivideEdge(edges[i], results[i].points, results[i].parameters, mesh,
-					results[i].status, forced[i]);
+					results[i].status, count[i]);
 			});
 
-		PrintMessage(3, "Transfinite faces: ", int(pairs.size() / 2), " candidates, ",
-			int(redivide.size()), " edges redivided, ", rejected, " chains left as they are");
+		PrintMessage(3, "Transfinite faces: ", int(faces.size()), " candidates, ",
+			int(dropped.size()) - restored, " dropped, ", int(redivide.size()), " edges redivided");
 	}
 
 

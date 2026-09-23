@@ -160,9 +160,12 @@ namespace netgen
 	}
 
 
-	void CollectTransfiniteEdgePairs(const OCCGeometry & geom, int facenr,
-		double corner_angle, std::vector<std::pair<int, int> > & pairs)
+	bool CollectTransfiniteSides(const OCCGeometry & geom, int facenr,
+		double corner_angle, std::vector<int> sides[4])
 	{
+		for (int q = 0; q < 4; q++)
+			sides[q].clear();
+
 		const TopoDS_Face face = TopoDS::Face(geom.fmap(facenr));
 
 		TopoDS_Wire wire;
@@ -173,13 +176,13 @@ namespace netgen
 			wires++;
 		}
 		if (wires != 1)
-			return;
+			return false;
 
 		int wire_edges = 0;
 		for (TopExp_Explorer exp(wire, TopAbs_EDGE); exp.More(); exp.Next())
 			wire_edges++;
-		if (wire_edges != 4)
-			return;
+		if (wire_edges < 4)
+			return false;
 
 		// the wire explorer gives the edges head to tail, a seam twice
 		std::vector<TopoDS_Edge> edges;
@@ -187,31 +190,37 @@ namespace netgen
 		{
 			const TopoDS_Edge & edge = exp.Current();
 			if (BRep_Tool::Degenerated(edge))
-				return;
+				return false;
 			edges.push_back(edge);
 		}
-		if (edges.size() != 4)
-			return;
+		const int nedges = int(edges.size());
+		if (nedges != wire_edges)
+			return false;
 
+		// corners[k]: the wire turns sharply where edge k starts
 		const double corner_turn = M_PI - corner_angle * M_PI / 180.;
-		for (int k = 0; k < 4; k++)
+		std::vector<int> corners;
+		for (int k = 0; k < nedges; k++)
 		{
 			gp_Vec t_in, t_out;
-			if (!WireEdgeTangent(edges[k], true, t_in) || !WireEdgeTangent(edges[(k + 1) % 4], false, t_out))
-				return;
-			if (t_in.Angle(t_out) <= corner_turn)
-				return;
+			if (!WireEdgeTangent(edges[(k + nedges - 1) % nedges], true, t_in) ||
+				!WireEdgeTangent(edges[k], false, t_out))
+				return false;
+			if (t_in.Angle(t_out) > corner_turn)
+				corners.push_back(k);
 		}
+		if (corners.size() != 4)
+			return false;
 
-		int edgenr[4];
-		for (int k = 0; k < 4; k++)
-		{
-			edgenr[k] = geom.emap.FindIndex(edges[k]);
-			if (edgenr[k] < 1)
-				return;
-		}
-		pairs.push_back(std::make_pair(edgenr[0], edgenr[2]));
-		pairs.push_back(std::make_pair(edgenr[1], edgenr[3]));
+		for (int q = 0; q < 4; q++)
+			for (int k = corners[q]; k != corners[(q + 1) % 4]; k = (k + 1) % nedges)
+			{
+				const int edgenr = geom.emap.FindIndex(edges[k]);
+				if (edgenr < 1)
+					return false;
+				sides[q].push_back(edgenr);
+			}
+		return true;
 	}
 
 
