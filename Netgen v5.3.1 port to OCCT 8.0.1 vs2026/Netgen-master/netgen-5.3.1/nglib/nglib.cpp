@@ -1754,13 +1754,19 @@ namespace nglib
 			patches.push_back(shell);
 		}
 		//
-		TopoDS_Shell shell;
-		builder.MakeShell(shell);
+		// Each patch is a shell of its own, so that a patch that shares no edge with the others is written
+		// out as a part of its own and carries only its own faces
+		TopoDS_Compound compound;
+		builder.MakeCompound(compound);
 		int numOfExtractedFaces = 0;
 		//
 		for (size_t i = 0; i < patches.size(); i++)
 		{
-			if (offset == 0) numOfExtractedFaces += AddFacesToShell(patches[i], builder, shell);
+			TopoDS_Shell shell;
+			builder.MakeShell(shell);
+			int numOfPatchFaces = 0;
+			//
+			if (offset == 0) numOfPatchFaces = AddFacesToShell(patches[i], builder, shell);
 			else
 			{
 				TopoDS_Shape offsetShape = OffsetShell(patches[i], offset, tolerance);
@@ -1771,18 +1777,16 @@ namespace nglib
 					cout << "The extracted surface could not be offset by " << offset << "." << endl;
 					return NULL;
 				}
-				numOfExtractedFaces += AddFacesToShell(offsetShape, builder, shell);
+				numOfPatchFaces = AddFacesToShell(offsetShape, builder, shell);
 			}
+			if (numOfPatchFaces > 0) builder.Add(compound, shell);
+			numOfExtractedFaces += numOfPatchFaces;
 		}
 		if (numOfExtractedFaces == 0)
 		{
 			cout << "The extraction left no surface at all." << endl;
 			return NULL;
 		}
-		//
-		TopoDS_Compound compound;
-		builder.MakeCompound(compound);
-		builder.Add(compound, shell);
 		//
 		OCCGeometry * newoccgeo = new OCCGeometry;
 		newoccgeo->shape = compound;
