@@ -164,6 +164,20 @@ namespace netgen
 	}
 
 
+	// An internal edge is a line inside the face that a grid would run across,
+	// and an external one is not part of its boundary at all.
+	static bool HasOnlyBoundaryEdges(const TopoDS_Face & face)
+	{
+		for (TopExp_Explorer exp(face, TopAbs_EDGE); exp.More(); exp.Next())
+		{
+			const TopAbs_Orientation orientation = exp.Current().Orientation();
+			if (orientation != TopAbs_FORWARD && orientation != TopAbs_REVERSED)
+				return false;
+		}
+		return true;
+	}
+
+
 	bool CollectTransfiniteSides(const OCCGeometry & geom, int facenr,
 		double corner_angle, std::vector<int> sides[4])
 	{
@@ -171,6 +185,8 @@ namespace netgen
 			sides[q].clear();
 
 		const TopoDS_Face face = TopoDS::Face(geom.fmap(facenr));
+		if (!HasOnlyBoundaryEdges(face))
+			return false;
 
 		TopoDS_Wire wire;
 		int wires = 0;
@@ -241,7 +257,7 @@ namespace netgen
 		int wires = 0;
 		for (TopExp_Explorer exp(face, TopAbs_WIRE); exp.More(); exp.Next())
 			wires++;
-		if (wires != 1)
+		if (wires != 1 || !HasOnlyBoundaryEdges(face))
 			return false;
 		for (TopExp_Explorer exp(face, TopAbs_EDGE); exp.More(); exp.Next())
 			if (BRep_Tool::Degenerated(TopoDS::Edge(exp.Current())))

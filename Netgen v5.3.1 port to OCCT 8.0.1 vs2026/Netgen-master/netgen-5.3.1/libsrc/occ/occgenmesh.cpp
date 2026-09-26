@@ -743,6 +743,14 @@ namespace netgen
 					if (edge_result.skip)
 						continue;
 
+					// An external edge lies outside the face and bounds nothing.  An
+					// internal one - a line drawn on the face that does not cut it
+					// through - has the face on both sides, so it enters the front
+					// once in each direction and the face is meshed around it.
+					if (edge.Orientation() == TopAbs_EXTERNAL)
+						continue;
+					const bool internal_edge = edge.Orientation() == TopAbs_INTERNAL;
+
 
 					Handle(Geom2d_Curve) cof;
 					double s0, s1;
@@ -865,6 +873,15 @@ namespace netgen
 						}
 
 						mesh.AddSegment(seg);
+
+						if (internal_edge)
+						{
+							edgenr++;
+							seg.edgenr = edgenr;
+							swap(seg[0], seg[1]);
+							swap(seg.epgeominfo[0], seg.epgeominfo[1]);
+							mesh.AddSegment(seg);
+						}
 
 						//edgesegments[geomedgenr-1]->Append(mesh.GetNSeg());
 

@@ -62,6 +62,12 @@ dropped and the rest are balanced again from the counts the mesh size asks for, 
 for a face that is not going to be structured. The edges are then divided into their counts, spaced
 as the local mesh size would space them.
 
+A face may carry edges that do not bound it: an INTERNAL edge is a line lying on the face that does not
+cut it through - where a non-manifold shell has another face meeting it along a line that stops inside
+it - and an EXTERNAL edge lies outside it. The edge meshing gives an internal edge's segments to the face
+once in each direction, so the advancing front closes around the line and the triangles on both sides
+of it share its nodes; external edges are left out. Faces with either kind are not meshed as grids.
+
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).
