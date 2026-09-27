@@ -552,8 +552,14 @@ int Meshing3 :: ApplyRules
 				  if (!connectedpairs.Used (in2)) ok = 0;
 				}
 			    }
-			  if (el.GetType() == PYRAMID) 
-			    { 
+			  // A boundary layer identifies the sides of its quads, and a pyramid there has to stand on
+			  // an identified pair. A mesh without identified pairs has quads anywhere, such as where a
+			  // hexahedral mesh meets the tetrahedra, and a pyramid may stand on any of them - but only
+			  // with an apex of its own: one taking the apex of its neighbour chains the pyramids of a
+			  // whole face together and leaves gaps between them that no tetrahedron closes
+			  if (el.GetType() == PYRAMID &&
+			      (adfront->HasConnectedPairs() || rule->GetNOldP() == rule->GetNP()))
+			    {
 			      if (loktestmode)
 				(*testout) << "map pyramid, rule = " << rule->Name() << endl;
 			      for (j = 1; j <= 2; j++)

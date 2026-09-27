@@ -68,6 +68,30 @@ it - and an EXTERNAL edge lies outside it. The edge meshing gives an internal ed
 once in each direction, so the advancing front closes around the line and the triangles on both sides
 of it share its nodes; external edges are left out. Faces with either kind are not meshed as grids.
 
+`VOL_VOLUME_MESH <in.vol> <out.vol> <parameters>` meshes a boundary it is given by tetrahedra. The
+input holds the points and the closed boundary of every domain - triangles and quadrilaterals, each face
+written for every domain it bounds, that domain inside and nothing outside, wound outward from it. The
+points come first in the file, since a surface element marks its points as boundary points only when
+they exist already, and a boundary point is one the volume optimisation never moves. So the boundary
+points keep their place and are the first points of the output, in their input order, which lets the
+caller join the elements to the mesh the boundary came from. A failed run leaves what it meshed in
+`<out>_error.vol`. PrePoMax meshes the cells of a compound that its sweep cannot reach with it.
+
+A pyramid stands on every quadrilateral, which took two changes to Netgen 5.3.1. `ruler3.cpp` accepted
+a pyramid rule only where two opposite sides of the quadrilateral are identified point pairs, which a
+boundary layer makes and nothing else does; without identified pairs in the mesh, a rule that gives the
+pyramid an apex of its own is now accepted on any quadrilateral. A rule that takes its apex from a
+neighbour is not, because it chains the pyramids of a whole face together and leaves gaps between them
+that no tetrahedron closes - a 9 by 9 grid of quadrilaterals failed that way with 6 open faces. The two
+rules with an apex of their own, `Pyramid on quad` and `small Pyramid on quad` in `pyramidrls.cpp`,
+carried quality 100, and a rule is tried only once the class of its face reaches its quality, which the
+quadrilateral passes give up on at 15. They carry 3 and 11 now, just above the badness their apexes
+have, 2.5 and 10.1, so that they are tried after the rules that connect to an existing point. Measured on
+a unit hexahedral block with tetrahedral boxes on it - one side, the top, both, a box wrapped round
+a corner of the block and a box holding the block inside it as a cavity - every quadrilateral carries
+a pyramid, the mesh is conformal, and the minimum SICN is 0.41 to 0.53 for the tetrahedra and 0.53 to
+0.65 for the pyramids.
+
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).

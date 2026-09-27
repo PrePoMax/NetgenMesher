@@ -77,6 +77,8 @@ void ReadEdgeNodes(const char *fileName, int &numOfNodes, double** &nodes);
 // Occ Mesh
 bool OccMesh(int argc, char* argv[]);
 bool OccEdgeMesh(int argc, char* argv[]);
+// Vol Mesh
+bool VolVolumeMesh(int argc, char* argv[]);
 Ng_Meshing_Parameters ReadParameters(const char *fileName, double &deflection);
 // The rest
 bool Test(int argc, char* argv[]);
@@ -172,6 +174,8 @@ static int RunCommand(int argc, char* argv[])
 	// Occ Mesh
 	else if (strcmp(argv[1], "BREP_MESH") == 0) return OccMesh(argc, argv);
 	else if (strcmp(argv[1], "BREP_EDGE_MESH") == 0) return OccEdgeMesh(argc, argv);
+	// Vol Mesh
+	else if (strcmp(argv[1], "VOL_VOLUME_MESH") == 0) return VolVolumeMesh(argc, argv);
 	// The rest
 	else if (strcmp(argv[1], "TEST") == 0) return Test(argc, argv);
 	else
@@ -320,6 +324,13 @@ void PrintUsage(const char* exePath)
 	cout << "                                     [refinement]" << endl;
 	cout << "  BREP_EDGE_MESH                     <in.brep> <out.vol> <parameters>" << endl;
 	cout << "                                     [refinement]" << endl;
+	cout << endl;
+	cout << "Volume meshing of a given boundary" << endl;
+	cout << "  VOL_VOLUME_MESH                    <in.vol> <out.vol> <parameters>" << endl;
+	cout << "      <in.vol> holds the points and the closed boundary of every domain," << endl;
+	cout << "      triangles and quadrilaterals; pyramids and prisms are built on the" << endl;
+	cout << "      quadrilaterals. The boundary points stay fixed and are the first" << endl;
+	cout << "      points of <out.vol>, in their input order." << endl;
 	cout << endl;
 	cout << "  <parameters> is a text file of meshing parameters; [refinement] is a" << endl;
 	cout << "  local mesh size file; [edgeNodes] is a file of prescribed edge nodes." << endl;
@@ -1964,6 +1975,72 @@ bool OccEdgeMesh(int argc, char* argv[])
 
 	Ng_Exit();
 
+	return 0;
+}
+// Vol Mesh
+bool VolVolumeMesh(int argc, char* argv[])
+{
+	// argv[2]	...	input vol file with the points and the closed boundary of every domain
+	// argv[3]	...	output vol file
+	// argv[4]	...	mesh parameters
+	if (argc < 5)
+	{
+		cerr << "VOL_VOLUME_MESH needs an input vol file, an output vol file and a mesh parameters file." << endl;
+		return 1;
+	}
+	//
+	Ng_Init();
+	//
+	Ng_Mesh* mesh = Ng_LoadMesh(argv[2]);
+	int numOfBoundaryPoints = Ng_GetNP(mesh);
+	int numOfBoundaryElements = Ng_GetNSE(mesh);
+	if (numOfBoundaryPoints == 0 || numOfBoundaryElements == 0)
+	{
+		cerr << "The boundary mesh " << argv[2] << " holds no points or no surface elements." << endl;
+		return 1;
+	}
+	cout << "Boundary mesh: " << numOfBoundaryPoints << " points, " << numOfBoundaryElements
+		<< " surface elements." << endl;
+	//
+	double deflection = 0;
+	Ng_Meshing_Parameters mp = ReadParameters(argv[4], deflection);
+	// The boundary is given, so there is nothing to size from a file or to raise to second order here. A face
+	// shared by two domains is written once for each of them, which the overlap check would report
+	mp.meshsize_filename = NULL;
+	mp.second_order = 0;
+	mp.check_overlapping_boundary = 0;
+	//
+	cout << "Start Volume Meshing...." << endl;
+	Ng_Result ng_res = Ng_GenerateVolumeMesh(mesh, &mp);
+	if (ng_res != NG_OK)
+	{
+		// What was meshed before the failure is kept beside the output, to show where it stopped
+		char fileNameWithPath[_MAX_PATH];
+		char drive[_MAX_DRIVE];
+		char dir[_MAX_DIR];
+		char fname[_MAX_FNAME];
+		char ext[_MAX_EXT];
+		_splitpath_s(argv[3], drive, dir, fname, ext);
+		stringstream ss;
+		ss << fname << "_error";
+		_makepath_s(fileNameWithPath, drive, dir, ss.str().c_str(), ext);
+		Ng_SaveMesh(mesh, fileNameWithPath);
+		//
+		cerr << "The volume could not be meshed from the boundary mesh." << endl;
+		return 1;
+	}
+	// The boundary points are the first points of the result, in their input order, so that the caller can join
+	// the volume elements to the mesh the boundary came from
+	if (Ng_GetNP(mesh) < numOfBoundaryPoints)
+	{
+		cerr << "Volume meshing removed boundary points, so the volume mesh cannot be joined to its boundary." << endl;
+		return 1;
+	}
+	cout << "Points: " << Ng_GetNP(mesh) << endl;
+	cout << "Elements: " << Ng_GetNE(mesh) << endl;
+	//
+	Ng_SaveMesh(mesh, argv[3]);
+	//
 	return 0;
 }
 Ng_Meshing_Parameters ReadParameters(const char *fileName, double &deflection)

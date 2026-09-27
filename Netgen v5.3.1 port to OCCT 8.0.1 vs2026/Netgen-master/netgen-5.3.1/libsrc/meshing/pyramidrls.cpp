@@ -5,7 +5,7 @@ const char * pyramidrules[] = {
 "\n",\
 "rule \"Pyramid on quad\"\n",\
 "\n",\
-"quality 100\n",\
+"quality 3\n",\
 "\n",\
 "mappoints\n",\
 "(0, 0, 0);\n",\
@@ -55,7 +55,7 @@ const char * pyramidrules[] = {
 "\n",\
 "rule \"small Pyramid on quad\"\n",\
 "\n",\
-"quality 100\n",\
+"quality 11\n",\
 "\n",\
 "mappoints\n",\
 "(0, 0, 0);\n",\

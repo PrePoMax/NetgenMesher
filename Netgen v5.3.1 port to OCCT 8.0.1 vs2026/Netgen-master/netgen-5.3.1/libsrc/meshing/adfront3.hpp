@@ -284,6 +284,8 @@ public:
   INDEX AddFace (const MiniElement2d & e);
   ///
   INDEX AddConnectedPair (const INDEX_2 & pair);
+  /// whether any point pair is identified, as a boundary layer identifies the sides of its quads
+  bool HasConnectedPairs () const { return connectedpairs != NULL; }
   ///
   void IncrementClass (INDEX fi)
   { faces.Elem(fi).IncrementQualClass(); }
