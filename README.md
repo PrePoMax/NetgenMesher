@@ -92,6 +92,13 @@ a corner of the block and a box holding the block inside it as a cavity - every 
 a pyramid, the mesh is conformal, and the minimum SICN is 0.41 to 0.53 for the tetrahedra and 0.53 to
 0.65 for the pyramids.
 
+The volume optimisation had to learn about the pyramids as well. `CombineImprove` in `improve3.cpp`
+collapses an edge by merging its two points, and it looked for them among the first four points of an
+element only - a whole tetrahedron, but not a pyramid - so a pyramid holding one point as its apex and the
+other in its base was counted as holding one of them and was kept, its apex merged into its base, instead
+of being deleted. It now leaves an edge alone when an element on either point is not a tetrahedron, as
+`SplitImprove` and `SwapImprove` already did. A mesh of tetrahedra alone is unchanged.
+
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).

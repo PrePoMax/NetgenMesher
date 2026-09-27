@@ -129,6 +129,15 @@ void MeshOptimize3d :: CombineImprove (Mesh & mesh,
 		  hasonepi.Append (row2[k]);
 		}
 	    } 
+	  // The elements are searched for the two points among their first four only, which is a whole
+	  // tetrahedron but not a pyramid: one holding pi2 as its apex and pi1 in its base was counted as
+	  // holding one point, and was kept with its apex merged into its base instead of being deleted
+	  bool puretet = 1;
+	  for (int k = 0; k < hasonepi.Size(); k++)
+	    if (mesh[hasonepi[k]].GetType() != TET) puretet = 0;
+	  for (int k = 0; k < hasbothpi.Size(); k++)
+	    if (mesh[hasbothpi[k]].GetType() != TET) puretet = 0;
+	  if (!puretet) continue;
 	  
 	  double bad1 = 0;
 	  for (int k = 0; k < hasonepi.Size(); k++)
