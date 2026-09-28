@@ -5,6 +5,7 @@
 #include <fstream>
 #include <string>
 #include <sstream>
+#include <set>
 #include <vector>
 #include <chrono>
 
@@ -31,6 +32,9 @@
 #include "BRepAdaptor_Curve.hxx"
 #include "BRepBuilderAPI_MakeVertex.hxx"
 #include "BRepExtrema_DistShapeShape.hxx"
+#include "BRepAlgoAPI_Defeaturing.hxx"
+#include "BRepCheck_Analyzer.hxx"
+#include "Standard_Failure.hxx"
 #include "GCPnts_TangentialDeflection.hxx"
 
 #include "windows.h"
@@ -66,6 +70,7 @@ bool SplitAFaceUsingTwoPoints(int argc, char* argv[]);
 bool SplitGeometry(int argc, char* argv[], bool preview);
 bool RemoveSolids(int argc, char* argv[]);
 bool MergeSolids(int argc, char* argv[]);
+bool DefeatureBrep(int argc, char* argv[]);
 bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool ExtractFaces(int argc, char* argv[]);
@@ -165,6 +170,7 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_SPLIT_PREVIEW") == 0) return SplitGeometry(argc, argv, true);
 	else if (strcmp(argv[1], "BREP_REMOVE_SOLIDS") == 0) return RemoveSolids(argc, argv);
 	else if (strcmp(argv[1], "BREP_MERGE_SOLIDS") == 0) return MergeSolids(argc, argv);
+	else if (strcmp(argv[1], "BREP_DEFEATURE") == 0) return DefeatureBrep(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT_CLOSED_FACES") == 0) return SplitClosedFaces(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
@@ -310,6 +316,8 @@ void PrintUsage(const char* exePath)
 	cout << "      an assembly are divided when they are written out, so that a shape" << endl;
 	cout << "      and the parts taken from it are numbered the same.  Defaults to 1," << endl;
 	cout << "      which divides nothing." << endl;
+	cout << "  BREP_DEFEATURE                     <in.brep> <out.brep> <faceId> [faceId ...]" << endl;
+	cout << "      Removes selected faces from one CAD solid and closes the gap." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -821,6 +829,108 @@ bool MergeSolids(int argc, char* argv[])
 		return 1;
 	}
 	return 0;
+}
+// The face ids are the order Netgen uses when it builds its face map from a loaded solid.
+// Read the BREP ourselves so the faces given to OCCT belong to the shape being defeatured.
+bool DefeatureBrep(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 5)
+		{
+			cerr << "The BREP_DEFEATURE command needs an input file, an output file and face ids." << endl;
+			return 1;
+		}
+		BRep_Builder builder;
+		TopoDS_Shape inputShape;
+		if (!BRepTools::Read(inputShape, argv[2], builder))
+		{
+			cerr << "Error reading BREP file: " << argv[2] << endl;
+			return 1;
+		}
+		TopTools_IndexedMapOfShape faces;
+		TopTools_IndexedMapOfShape solids;
+		TopExp::MapShapes(inputShape, TopAbs_FACE, faces);
+		TopExp::MapShapes(inputShape, TopAbs_SOLID, solids);
+		if (solids.Extent() != 1)
+		{
+			cerr << "Defeaturing needs a BREP containing one solid." << endl;
+			return 1;
+		}
+		std::set<int> selectedFaceIds;
+		for (int i = 4; i < argc; i++)
+		{
+			istringstream stream(argv[i]);
+			int faceId;
+			while (stream >> faceId)
+			{
+				if (faceId < 1 || faceId > faces.Extent())
+				{
+					cerr << "Face id " << faceId << " is outside 1 to " << faces.Extent() << "." << endl;
+					return 1;
+				}
+				selectedFaceIds.insert(faceId);
+			}
+			if (!stream.eof())
+			{
+				cerr << "Invalid face id: " << argv[i] << endl;
+				return 1;
+			}
+		}
+		if (selectedFaceIds.empty())
+		{
+			cerr << "No face ids were given." << endl;
+			return 1;
+		}
+		BRepAlgoAPI_Defeaturing defeaturing;
+		defeaturing.SetShape(inputShape);
+		defeaturing.SetRunParallel(false);
+		for (int faceId : selectedFaceIds) defeaturing.AddFaceToRemove(faces(faceId));
+		defeaturing.Build();
+		if (!defeaturing.IsDone())
+		{
+			defeaturing.DumpErrors(cerr);
+			cerr << "The selected faces could not be defeatured." << endl;
+			return 1;
+		}
+		if (defeaturing.HasWarnings()) defeaturing.DumpWarnings(cout);
+		TopoDS_Shape result = defeaturing.Shape();
+		if (result.IsNull())
+		{
+			cerr << "Defeaturing returned no shape." << endl;
+			return 1;
+		}
+		TopTools_IndexedMapOfShape resultFaces;
+		TopTools_IndexedMapOfShape resultSolids;
+		TopExp::MapShapes(result, TopAbs_FACE, resultFaces);
+		TopExp::MapShapes(result, TopAbs_SOLID, resultSolids);
+		if (resultSolids.Extent() != 1 || resultFaces.Extent() > faces.Extent() ||
+			!BRepCheck_Analyzer(result).IsValid())
+		{
+			cerr << "Defeaturing did not return a valid single solid." << endl;
+			return 1;
+		}
+		// A no-op may still return a rebuilt shape. Keep the input if no face was removed.
+		if (resultFaces.Extent() == faces.Extent()) result = inputShape;
+		if (!BRepTools::Write(result, argv[3]))
+		{
+			cerr << "Error writing BREP file: " << argv[3] << endl;
+			return 1;
+		}
+		cout << "Defeature finished successfully: " << faces.Extent() - resultFaces.Extent()
+		     << " faces were removed." << endl;
+		return 0;
+	}
+	catch (const Standard_Failure & error)
+	{
+		cerr << "Defeaturing failed: " << error.GetMessageString() << endl;
+		return 1;
+	}
+	catch (const std::exception & error)
+	{
+		cerr << "Defeaturing failed: " << error.what() << endl;
+		return 1;
+	}
 }
 // A point strictly inside the solid, found just behind one of its faces. The classifier confirms it,
 // so a face whose normal points the other way, or a sample that falls in a hole, only costs a retry
