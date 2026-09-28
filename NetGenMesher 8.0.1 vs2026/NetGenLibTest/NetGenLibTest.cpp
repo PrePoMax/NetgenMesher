@@ -65,6 +65,7 @@ bool ReverseBrepFaceOrientations(int argc, char* argv[]);
 bool SplitAFaceUsingTwoPoints(int argc, char* argv[]);
 bool SplitGeometry(int argc, char* argv[], bool preview);
 bool RemoveSolids(int argc, char* argv[]);
+bool MergeSolids(int argc, char* argv[]);
 bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool ExtractFaces(int argc, char* argv[]);
@@ -163,6 +164,7 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_SPLIT") == 0) return SplitGeometry(argc, argv, false);
 	else if (strcmp(argv[1], "BREP_SPLIT_PREVIEW") == 0) return SplitGeometry(argc, argv, true);
 	else if (strcmp(argv[1], "BREP_REMOVE_SOLIDS") == 0) return RemoveSolids(argc, argv);
+	else if (strcmp(argv[1], "BREP_MERGE_SOLIDS") == 0) return MergeSolids(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT_CLOSED_FACES") == 0) return SplitClosedFaces(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
@@ -745,6 +747,73 @@ bool RemoveSolids(int argc, char* argv[])
 		//
 		cout << "Remove solids finished successfully: " << numOfFacesBefore - RemovalFMap.Extent()
 		     << " faces were removed with them." << endl;
+	}
+	catch (const std::exception& e)
+	{
+		cerr << "Error: " << e.what() << endl;
+		return 1;
+	}
+	return 0;
+}
+// The named solids become one, which takes the place of the first of them, and every other solid is
+// written out as it is. A merge always loses the faces the solids shared, so a result with as many faces
+// as before is one the modelling kernel refused.
+bool MergeSolids(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 6)
+		{
+			cerr << "The BREP_MERGE_SOLIDS command needs an input file, an output file and at least "
+			     << "two solid ids." << endl;
+			return 1;
+		}
+		//
+		vector<int> solidIds;
+		for (int i = 4; i < argc; i++)
+		{
+			istringstream stream(argv[i]);
+			int solidId;
+			while (stream >> solidId) solidIds.push_back(solidId);
+		}
+		if (solidIds.size() < 2)
+		{
+			cerr << "At least two solid ids must be given." << endl;
+			return 1;
+		}
+		// Initialise the Netgen Core library
+		Ng_Init();
+		// Read in the OCC File
+		cout << "Ng_OCC_Load_BREP" << endl;
+		Ng_OCC_Geometry * occ_geom = Ng_OCC_Load_BREP(argv[2]);
+		if (!occ_geom)
+		{
+			cout << "Error reading in BREP File: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Successfully loaded BREP File: " << argv[2] << endl;
+		//
+		TopTools_IndexedMapOfShape MergeFMap;
+		Ng_OCC_TopTools_IndexedMapOfShape * occ_merge_fmap = (Ng_OCC_TopTools_IndexedMapOfShape*)&MergeFMap;
+		Ng_OCC_GetFMap(occ_geom, occ_merge_fmap);
+		int numOfFacesBefore = MergeFMap.Extent();
+		//
+		cout << "Ng_OCC_MergeSolids" << endl;
+		occ_geom = Ng_OCC_MergeSolids(occ_geom, &solidIds[0], (int)solidIds.size());
+		//
+		MergeFMap.Clear();
+		Ng_OCC_GetFMap(occ_geom, occ_merge_fmap);
+		if (MergeFMap.Extent() >= numOfFacesBefore)
+		{
+			cerr << "The solids were not merged." << endl;
+			return 1;
+		}
+		// Save
+		cout << "Ng_OCC_Save_BREP" << endl;
+		Ng_OCC_Save_BREP(occ_geom, argv[3]);
+		//
+		cout << "Merge solids finished successfully: " << numOfFacesBefore - MergeFMap.Extent()
+		     << " faces were removed." << endl;
 	}
 	catch (const std::exception& e)
 	{

@@ -725,6 +725,7 @@ DLL_HEADER Ng_OCC_Geometry * Ng_OCC_ReverseFaceOrientations(Ng_OCC_Geometry * ge
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitAFaceUsingTwoPoints(Ng_OCC_Geometry * geom, int faceId, double x1, double y1, double z1, double x2, double y2, double z2);
 
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_RemoveSolids(Ng_OCC_Geometry * geom, int * solidIds, int numOfSolidIds);
+DLL_HEADER Ng_OCC_Geometry * Ng_OCC_MergeSolids(Ng_OCC_Geometry * geom, int * solidIds, int numOfSolidIds);
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithPlane(Ng_OCC_Geometry * geom, double * origin, double * normal, double * extent, double fuzzyValue, int * solidIds, int numOfSolidIds, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds);
 
 DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithExtendedFace(Ng_OCC_Geometry * geom, Ng_OCC_Geometry ** sourceGeoms, int * faceIdCounts, int numOfSources, int * faceIds, double * extent, double offset, double fuzzyValue, int * solidIds, int numOfSolidIds, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds);

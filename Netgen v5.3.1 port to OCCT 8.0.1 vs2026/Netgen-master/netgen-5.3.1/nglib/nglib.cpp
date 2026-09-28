@@ -2667,6 +2667,21 @@ namespace nglib
 		return geom;
 	}
 
+	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_MergeSolids(Ng_OCC_Geometry * geom, int * solidIds, int numOfSolidIds)
+	{
+		try
+		{
+			OCCGeometry * occgeom = (OCCGeometry*)geom;
+			occgeom = MergeSolids(occgeom, solidIds, numOfSolidIds);
+			return ((Ng_OCC_Geometry *)occgeom);
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_MergeSolids.");
+		}
+		return geom;
+	}
+
 	DLL_HEADER Ng_OCC_Geometry * Ng_OCC_SplitWithPlane(Ng_OCC_Geometry * geom, double * origin, double * normal,
 	                                                   double * extent, double fuzzyValue, int * solidIds,
 	                                                   int numOfSolidIds, int * targetSolids,

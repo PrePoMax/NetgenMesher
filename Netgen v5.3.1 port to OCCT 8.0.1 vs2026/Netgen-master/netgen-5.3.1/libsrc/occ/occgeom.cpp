@@ -45,6 +45,10 @@
 #include <BRepTools.hxx>
 #include <TopExp.hxx>
 #include <Precision.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <TopTools_MapOfShape.hxx>
+#include <algorithm>
 
 
 namespace netgen
@@ -1634,6 +1638,256 @@ namespace netgen
 		{
 			PrintMessage(1, "Removing the named solids would leave nothing.");
 			return occgeom;
+		}
+		//
+		occgeom->shape = result;
+		occgeom->changed = 1;
+		occgeom->BuildFMap();
+		//
+		return occgeom;
+	}
+	// An edge that has the same face on both sides, the seam of a closed surface, separates nothing
+	static bool IsSeamEdge(const TopoDS_Shape & edge, const TopTools_IndexedDataMapOfShapeListOfShape & edgeFaces)
+	{
+		const TopTools_ListOfShape & faces = edgeFaces.FindFromKey(edge);
+		for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next())
+		{
+			if (BRep_Tool::IsClosed(TopoDS::Edge(edge), TopoDS::Face(it.Value()))) return true;
+		}
+		return false;
+	}
+	// Heals away the edges the removed faces of a merge leave on the outside of the merged solid, where the
+	// faces on both sides lie on one surface, which gives back the faces a split divided. The faces are
+	// merged first, across the edges of removed faces only, so the faces the model had before the split
+	// stay as they were. The edges are joined next, only at the vertices of removed faces, which takes out
+	// the points the cut left on the edges it crossed. Nothing the merged solid shares with another solid
+	// is touched, and a result that is not one valid solid still holding all of that is not used.
+	static TopoDS_Shape UnifyMergedSolid(const TopoDS_Shape & mergedSolid,
+	                                     const TopTools_IndexedMapOfShape & interfaceEdges,
+	                                     const TopTools_IndexedMapOfShape & interfaceVertices,
+	                                     const TopTools_IndexedMapOfShape & otherShapes)
+	{
+		TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+		TopExp::MapShapesAndAncestors(mergedSolid, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+		TopTools_MapOfShape keepEdges;
+		for (int i = 1; i <= edgeFaces.Extent(); i++)
+		{
+			const TopoDS_Shape & edge = edgeFaces.FindKey(i);
+			if (otherShapes.Contains(edge) || (!interfaceEdges.Contains(edge) && !IsSeamEdge(edge, edgeFaces)))
+				keepEdges.Add(edge);
+		}
+		ShapeUpgrade_UnifySameDomain unifyFaces(mergedSolid, Standard_False, Standard_True, Standard_False);
+		unifyFaces.KeepShapes(keepEdges);
+		unifyFaces.Build();
+		//
+		TopTools_MapOfShape keepVertices;
+		TopTools_IndexedMapOfShape shapes;
+		TopExp::MapShapes(unifyFaces.Shape(), TopAbs_VERTEX, shapes);
+		for (int i = 1; i <= shapes.Extent(); i++)
+		{
+			if (!interfaceVertices.Contains(shapes(i)) || otherShapes.Contains(shapes(i))) keepVertices.Add(shapes(i));
+		}
+		shapes.Clear();
+		TopExp::MapShapes(unifyFaces.Shape(), TopAbs_EDGE, shapes);
+		for (int i = 1; i <= shapes.Extent(); i++) if (otherShapes.Contains(shapes(i))) keepVertices.Add(shapes(i));
+		ShapeUpgrade_UnifySameDomain unifyEdges(unifyFaces.Shape(), Standard_True, Standard_False, Standard_False);
+		unifyEdges.KeepShapes(keepVertices);
+		unifyEdges.Build();
+		//
+		TopoDS_Shape unified = unifyEdges.Shape();
+		TopExp_Explorer solidExplorer(unified, TopAbs_SOLID);
+		if (!solidExplorer.More()) return mergedSolid;
+		TopoDS_Shape unifiedSolid = solidExplorer.Current();
+		solidExplorer.Next();
+		if (solidExplorer.More()) return mergedSolid;
+		if (!BRepCheck_Analyzer(unifiedSolid).IsValid()) return mergedSolid;
+		//
+		TopTools_IndexedMapOfShape unifiedShapes;
+		TopExp::MapShapes(unifiedSolid, unifiedShapes);
+		TopTools_IndexedMapOfShape mergedShapes;
+		TopExp::MapShapes(mergedSolid, mergedShapes);
+		for (int i = 1; i <= mergedShapes.Extent(); i++)
+		{
+			if (otherShapes.Contains(mergedShapes(i)) && !unifiedShapes.Contains(mergedShapes(i)))
+				return mergedSolid;
+		}
+		return unifiedSolid;
+	}
+	static int FindMergeGroup(vector<int> & groups, int i)
+	{
+		while (groups[i] != i)
+		{
+			groups[i] = groups[groups[i]];
+			i = groups[i];
+		}
+		return i;
+	}
+	// The named solids become one. The faces two of them share lie inside the result and are left out, and
+	// every other face is taken as it is, so a solid that is not named keeps the very faces, edges and
+	// vertices it shares with the result and the compound stays conformal. The solids are numbered by the
+	// order the explorer walks them, as for RemoveSolids, and the result takes the place of the first named
+	// one. Solids that do not share faces cannot become one solid and are refused.
+	OCCGeometry * MergeSolids(OCCGeometry * occgeom, int * solidIds, int numOfSolidIds)
+	{
+		if (solidIds == NULL || numOfSolidIds < 2)
+		{
+			PrintMessage(1, "At least two solids to merge must be named.");
+			return occgeom;
+		}
+		//
+		vector<TopoDS_Shape> solids;
+		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SOLID); exp0.More(); exp0.Next())
+			solids.push_back(exp0.Current());
+		//
+		vector<bool> merged(solids.size(), false);
+		vector<int> mergedIndices;
+		for (int i = 0; i < numOfSolidIds; i++)
+		{
+			int index = solidIds[i] - 1;
+			if (index < 0 || index >= (int)solids.size() || merged[index]) continue;
+			merged[index] = true;
+			mergedIndices.push_back(index);
+		}
+		if (mergedIndices.size() < 2)
+		{
+			PrintMessage(1, "Fewer than two of the named solids exist.");
+			return occgeom;
+		}
+		int firstIndex = *std::min_element(mergedIndices.begin(), mergedIndices.end());
+		// Which of the named solids hold each of their faces
+		TopTools_IndexedDataMapOfShapeListOfShape faceSolids;
+		TopTools_IndexedMapOfShape mergedSolidMap;
+		for (size_t k = 0; k < mergedIndices.size(); k++)
+		{
+			const TopoDS_Shape & solid = solids[mergedIndices[k]];
+			mergedSolidMap.Add(solid);
+			TopTools_IndexedMapOfShape solidFaces;
+			TopExp::MapShapes(solid, TopAbs_FACE, solidFaces);
+			for (int i = 1; i <= solidFaces.Extent(); i++)
+			{
+				if (!faceSolids.Contains(solidFaces(i))) faceSolids.Add(solidFaces(i), TopTools_ListOfShape());
+				faceSolids.ChangeFromKey(solidFaces(i)).Append(solid);
+			}
+		}
+		// The named solids must be connected through the faces they share
+		vector<int> groups(mergedSolidMap.Extent() + 1);
+		for (int i = 1; i <= mergedSolidMap.Extent(); i++) groups[i] = i;
+		for (int i = 1; i <= faceSolids.Extent(); i++)
+		{
+			const TopTools_ListOfShape & holders = faceSolids(i);
+			if (holders.Extent() < 2) continue;
+			int first = FindMergeGroup(groups, mergedSolidMap.FindIndex(holders.First()));
+			for (TopTools_ListIteratorOfListOfShape it(holders); it.More(); it.Next())
+				groups[FindMergeGroup(groups, mergedSolidMap.FindIndex(it.Value()))] = first;
+		}
+		for (int i = 2; i <= mergedSolidMap.Extent(); i++)
+		{
+			if (FindMergeGroup(groups, i) != FindMergeGroup(groups, 1))
+			{
+				PrintMessage(1, "The named solids do not all share faces, so they cannot become one solid.");
+				return occgeom;
+			}
+		}
+		// What the solids that are not named hold must stay exactly as it is
+		TopTools_IndexedMapOfShape otherShapes;
+		for (size_t i = 0; i < solids.size(); i++) if (!merged[i]) TopExp::MapShapes(solids[i], otherShapes);
+		// The faces of the result, oriented as their own solid holds them
+		BRep_Builder builder;
+		TopoDS_Compound faceCompound;
+		builder.MakeCompound(faceCompound);
+		TopTools_IndexedMapOfShape interfaceEdges;
+		TopTools_IndexedMapOfShape interfaceVertices;
+		for (size_t k = 0; k < mergedIndices.size(); k++)
+		{
+			for (TopExp_Explorer exp0(solids[mergedIndices[k]], TopAbs_FACE); exp0.More(); exp0.Next())
+			{
+				if (faceSolids.FindFromKey(exp0.Current()).Extent() > 1)
+				{
+					TopExp::MapShapes(exp0.Current(), TopAbs_EDGE, interfaceEdges);
+					TopExp::MapShapes(exp0.Current(), TopAbs_VERTEX, interfaceVertices);
+				}
+				else builder.Add(faceCompound, exp0.Current());
+			}
+		}
+		// A shell for every set of faces joined by edges: the outer boundary and one for every void
+		TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+		TopExp::MapShapesAndAncestors(faceCompound, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+		TopTools_IndexedMapOfShape resultFaces;
+		vector<TopoDS_Shape> orientedFaces(1);
+		for (TopoDS_Iterator it(faceCompound); it.More(); it.Next())
+		{
+			resultFaces.Add(it.Value());
+			orientedFaces.push_back(it.Value());
+		}
+		vector<int> faceShells(resultFaces.Extent() + 1, 0);
+		vector<TopoDS_Shell> shells;
+		for (int start = 1; start <= resultFaces.Extent(); start++)
+		{
+			if (faceShells[start] != 0) continue;
+			TopoDS_Shell shell;
+			builder.MakeShell(shell);
+			int shellNumber = (int)shells.size() + 1;
+			vector<int> stack(1, start);
+			faceShells[start] = shellNumber;
+			while (stack.size() > 0)
+			{
+				int faceIndex = stack.back();
+				stack.pop_back();
+				builder.Add(shell, orientedFaces[faceIndex]);
+				for (TopExp_Explorer exp0(orientedFaces[faceIndex], TopAbs_EDGE); exp0.More(); exp0.Next())
+				{
+					const TopTools_ListOfShape & neighbours = edgeFaces.FindFromKey(exp0.Current());
+					for (TopTools_ListIteratorOfListOfShape it(neighbours); it.More(); it.Next())
+					{
+						int neighbour = resultFaces.FindIndex(it.Value());
+						if (neighbour > 0 && faceShells[neighbour] == 0)
+						{
+							faceShells[neighbour] = shellNumber;
+							stack.push_back(neighbour);
+						}
+					}
+				}
+			}
+			shell.Closed(BRep_Tool::IsClosed(shell));
+			shells.push_back(shell);
+		}
+		if (shells.size() == 0)
+		{
+			PrintMessage(1, "The named solids leave no faces when merged.");
+			return occgeom;
+		}
+		// The outer boundary is the shell with the largest box and goes first
+		int outerShell = 0;
+		double largestExtent = -1;
+		for (size_t i = 0; i < shells.size(); i++)
+		{
+			Bnd_Box box;
+			BRepBndLib::Add(shells[i], box);
+			double extent = box.IsVoid() ? 0 : box.SquareExtent();
+			if (extent > largestExtent)
+			{
+				largestExtent = extent;
+				outerShell = (int)i;
+			}
+		}
+		TopoDS_Solid mergedSolid;
+		builder.MakeSolid(mergedSolid);
+		builder.Add(mergedSolid, shells[outerShell]);
+		for (size_t i = 0; i < shells.size(); i++) if ((int)i != outerShell) builder.Add(mergedSolid, shells[i]);
+		if (!BRepCheck_Analyzer(mergedSolid).IsValid())
+		{
+			PrintMessage(1, "The named solids do not give a valid solid when merged.");
+			return occgeom;
+		}
+		//
+		TopoDS_Shape resultSolid = UnifyMergedSolid(mergedSolid, interfaceEdges, interfaceVertices, otherShapes);
+		//
+		TopoDS_Compound result;
+		builder.MakeCompound(result);
+		for (size_t i = 0; i < solids.size(); i++)
+		{
+			if ((int)i == firstIndex) builder.Add(result, resultSolid);
+			else if (!merged[i]) builder.Add(result, solids[i]);
 		}
 		//
 		occgeom->shape = result;

@@ -41,6 +41,20 @@ or when points sampled inside it lie on the input edges - a piece of an edge the
 curve cut shorter - so what remains is the outline of the cut. PrePoMax draws it as the preview of a split. Run the
 executable with no arguments for the full grammar.
 
+`BREP_MERGE_SOLIDS <in.brep> <out.brep> <id> <id> ...` makes one solid of the named solids, numbered in
+explorer order as `BREP_REMOVE_SOLIDS` numbers them, and writes it in place of the first of them; every other
+solid is written as it was. There is no boolean operation: the faces two of the named solids share are left
+out and every other face is taken as it is, sorted by the edges they share into the outer shell and one shell
+for every void, so a solid that is not named keeps the very faces, edges and vertices it shares with the
+result and the compound stays conformal. `ShapeUpgrade_UnifySameDomain` then heals the result in two passes.
+The first merges faces lying on one surface, across the edges of the removed faces and across seams only, so
+faces the model had before a split stay as they were. The second joins edges, only at the vertices of the
+removed faces, which takes out the points a cut left on the edges it crossed. Anything another solid holds is
+kept by both passes, and a healed solid that is not valid or has lost any of it is not used. A box cut
+through three blind holes and merged back has the faces, edges and vertices it had before the cut. Solids
+that do not all share faces cannot become one solid and are refused, as is a result that is not a valid
+solid; the command fails when the result has as many faces as before. PrePoMax runs it for Fuse Cells.
+
 `BREP_MESH` reads two optional entries after `parallel_meshing_threads` in the mesh parameters file.
 `transfinite_faces` meshes 4-sided faces as structured triangle grids when the edge meshing put the
 same number of segments on their opposite sides: 0 none, 1 size checked - those whose grid passes the

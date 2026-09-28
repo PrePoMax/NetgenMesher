@@ -475,6 +475,7 @@ namespace netgen
 	OCCGeometry * SplitAFaceUsingTwoPoints(OCCGeometry * occgeom, int faceId, double x1, double y1, double z1, double x2, double y2, double z2);
 	OCCGeometry * SplitWithPlane(OCCGeometry * occgeom, double * origin, double * normal, double * extent, double fuzzyValue, int * solidIds, int numOfSolidIds, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds);
 	OCCGeometry * RemoveSolids(OCCGeometry * occgeom, int * solidIds, int numOfSolidIds);
+	OCCGeometry * MergeSolids(OCCGeometry * occgeom, int * solidIds, int numOfSolidIds);
 	bool GetTargetFaces(OCCGeometry * occgeom, int * targetSolids, int * targetFaceCounts, int numOfTargetGroups, int * targetFaceIds, TopTools_IndexedMapOfShape & targetFaces);
 	OCCGeometry * SplitWithExtendedFace(OCCGeometry * occgeom, OCCGeometry ** sourcegeoms,
 	                                          int * faceIdCounts, int numOfSources, int * faceIds,
