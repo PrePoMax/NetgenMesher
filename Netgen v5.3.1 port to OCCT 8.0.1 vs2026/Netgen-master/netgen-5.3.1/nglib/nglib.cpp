@@ -58,6 +58,7 @@
 #include <typeinfo>
 #include <map>
 #include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffset_MakeSimpleOffset.hxx>
 #include <Standard_Failure.hxx>
@@ -1802,7 +1803,13 @@ namespace nglib
 		//
 		if (numOfSplitFaces > 1)
 		{
-			ShapeUpgrade_ShapeDivideClosed divider = ShapeUpgrade_ShapeDivideClosed(shape);
+			// Faces a boolean operation cut from one face share its surface, so an edge between two of
+			// them carries a single pcurve that serves both. Dividing one of the faces removes that pcurve
+			// from the edges it splits, and the other face is left with edges it cannot be divided along:
+			// it comes back as an empty face holding them and two pieces that miss them. A copy gives every
+			// face a surface and pcurves of its own.
+			BRepBuilderAPI_Copy copier(shape, Standard_True);
+			ShapeUpgrade_ShapeDivideClosed divider = ShapeUpgrade_ShapeDivideClosed(copier.Shape());
 			//divider.SetPrecision(0.01);
 			//divider.SetMinTolerance(0.1 * 0.01);
 			//divider.SetMaxTolerance(0.01);
@@ -1814,7 +1821,7 @@ namespace nglib
 				// SameParameter and SameRange flags set, so the flags no longer describe the
 				// edge. BRepMesh trusts them and drops the triangulation of the affected faces,
 				// which then arrive in PrePoMax as holes in the part. Recomputing the flags
-				// here keeps the written file valid. The shape must not be copied first -
+				// here keeps the written file valid. The divided shape must not be copied again -
 				// BRepBuilderAPI_Copy of a freshly divided shape makes SameParameter throw.
 				try
 				{
