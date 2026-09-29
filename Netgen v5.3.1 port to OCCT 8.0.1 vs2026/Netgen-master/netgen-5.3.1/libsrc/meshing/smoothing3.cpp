@@ -300,7 +300,7 @@ namespace netgen
   {
   public:
     Mesh::T_POINTS & points;
-    const Mesh::T_VOLELEMENTS & elements;
+    Mesh::T_VOLELEMENTS elements;
     TABLE<int,PointIndex::BASE> elementsonpoint;
     const MeshingParameters & mp;
     PointIndex actpind;
@@ -325,12 +325,29 @@ namespace netgen
   PointFunction :: PointFunction (Mesh::T_POINTS & apoints, 
 				  const Mesh::T_VOLELEMENTS & aelements,
 				  const MeshingParameters & amp)
-    : points(apoints), elements(aelements), elementsonpoint(apoints.Size()), mp(amp)
+    : points(apoints), elementsonpoint(apoints.Size()), mp(amp)
   {
+    // The badness is that of tetrahedra, so a pyramid is weighed as the four tetrahedra its points span, wound
+    // as the tetrahedra of the mesh are. They turn inside out when its apex crosses its base, which a pyramid
+    // left out of the weighing did: its apex was moved to suit the tetrahedra around it and came out through
+    // the base
+    static const int pyramidtets[4][4] = { { 0, 1, 2, 4 }, { 0, 2, 3, 4 }, { 0, 1, 3, 4 }, { 1, 2, 3, 4 } };
+    for (int i = 0; i < aelements.Size(); i++)
+      {
+        if (aelements[i].GetType() == TET)
+          elements.Append (aelements[i]);
+        else if (aelements[i].GetType() == PYRAMID)
+          for (int k = 0; k < 4; k++)
+            {
+              Element tet(TET);
+              for (int j = 0; j < 4; j++)
+                tet[j] = aelements[i][pyramidtets[k][j]];
+              elements.Append (tet);
+            }
+      }
     for (int i = 0; i < elements.Size(); i++)
-      if (elements[i].NP() == 4)
-        for (int j = 0; j < elements[i].NP(); j++)
-          elementsonpoint.Add (elements[i][j], i);  
+      for (int j = 0; j < 4; j++)
+        elementsonpoint.Add (elements[i][j], i);
   }
 
   void PointFunction :: SetPointIndex (PointIndex aactpind)

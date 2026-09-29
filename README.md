@@ -113,6 +113,14 @@ other in its base was counted as holding one of them and was kept, its apex merg
 of being deleted. It now leaves an edge alone when an element on either point is not a tetrahedron, as
 `SplitImprove` and `SwapImprove` already did. A mesh of tetrahedra alone is unchanged.
 
+The smoothing, `ImproveMesh` in `smoothing3.cpp`, moves every inner point to where the badness of the
+elements on it is least, and it weighed tetrahedra only: the apex of a pyramid was moved to suit the
+tetrahedra around it and on `mixed_03` 13 of 211 pyramids came out with their apex through their base.
+A pyramid is now weighed as the four tetrahedra its five points span, which turn inside out exactly when
+the apex crosses the base. Keeping the points of pyramids fixed instead also stopped the inversion, but
+left the tetrahedra around them at a minimum SICN of 0.029; weighed, they reach 0.259 and the pyramids
+0.576. A mesh of tetrahedra alone is weighed as before.
+
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).
