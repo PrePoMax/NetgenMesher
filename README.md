@@ -121,6 +121,14 @@ the apex crosses the base. Keeping the points of pyramids fixed instead also sto
 left the tetrahedra around them at a minimum SICN of 0.029; weighed, they reach 0.259 and the pyramids
 0.576. A mesh of tetrahedra alone is weighed as before.
 
+A quadrilateral used to be scaled by the larger of its own size and the local mesh size, which suits a
+boundary layer, whose prism has to reach as far as the tetrahedra beyond it. A pyramid scaled so stood
+more than an edge of its base high wherever a fine swept mesh meets coarser tetrahedra, and in an inside
+corner it leaned over the quadrilaterals of the other face and left no room for their pyramids:
+PrePoMax's `mixed_03_1` kept 3 of its 233 quadrilaterals open and stopped. Without identified pairs a
+quadrilateral is scaled by its own size now (`meshing3.cpp`); every quadrilateral of `mixed_03_1` carries a
+pyramid, at a minimum SICN of 0.383, and its tetrahedra reach 0.275.
+
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).

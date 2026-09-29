@@ -283,8 +283,13 @@ GenerateMesh (Mesh & mesh, const MeshingParameters & mp)
 
       hshould = mesh.GetH (pmid);
 
+      // A quadrilateral of a boundary layer is scaled by the local mesh size, so that its prism reaches as far
+      // as the tetrahedra beyond it. Any other quadrilateral carries a pyramid, which is scaled by the
+      // quadrilateral itself: scaled by a local size coarser than a fine swept mesh, the pyramids stood more
+      // than an edge of their base high and leaned over the quadrilaterals of an inside corner, leaving no
+      // room for the pyramids of those
       if (adfront->GetFace (baseelem).GetNP() == 4)
-	hshould = max2 (his, hshould);
+	hshould = adfront->HasConnectedPairs() ? max2 (his, hshould) : his;
 
       double hmax = (his > hshould) ? his : hshould;
       
