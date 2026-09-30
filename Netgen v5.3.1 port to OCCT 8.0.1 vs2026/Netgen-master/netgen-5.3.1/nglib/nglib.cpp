@@ -1659,7 +1659,7 @@ namespace nglib
 		//
 		return occgeom;
 	}
-	// Everything that was extracted goes into one shell, and so comes back as one part. The faces of a
+	// Everything that is offset goes into one shell, and so comes back as one part. The faces of a
 	// connected patch keep the edges they share, and a selection that falls apart into several patches is
 	// still one shell, because it was one selection
 	int AddFacesToShell(const TopoDS_Shape & shape, BRep_Builder & builder, TopoDS_Shell & shell)
@@ -1708,8 +1708,8 @@ namespace nglib
 	// inside solid targetSolids[i], and a solid of zero numbers them in the shape itself. That is what a
 	// compound needs - the faces of each of its sub parts are numbered inside the solid the sub part was
 	// written out of - and what lets the faces of several sub parts be sewn into one body.
-	OCCGeometry * ExtractFaces(Ng_OCC_Geometry * geom, int * targetSolids, int * targetFaceCounts,
-	                           int numOfTargetGroups, int * faceIds, double offset)
+	OCCGeometry * OffsetFaces(Ng_OCC_Geometry * geom, int * targetSolids, int * targetFaceCounts,
+	                          int numOfTargetGroups, int * faceIds, double offset)
 	{
 		OCCGeometry * occgeom = (OCCGeometry*)geom;
 		//
@@ -1759,7 +1759,7 @@ namespace nglib
 		// out as a part of its own and carries only its own faces
 		TopoDS_Compound compound;
 		builder.MakeCompound(compound);
-		int numOfExtractedFaces = 0;
+		int numOfOffsetFaces = 0;
 		//
 		for (size_t i = 0; i < patches.size(); i++)
 		{
@@ -1772,20 +1772,20 @@ namespace nglib
 			{
 				TopoDS_Shape offsetShape = OffsetShell(patches[i], offset, tolerance);
 				// A surface that lands somewhere other than where it was asked to go is worse than no
-				// surface at all, so a failed offset fails the whole extraction
+				// surface at all, so a failed offset fails the whole face offset
 				if (offsetShape.IsNull())
 				{
-					cout << "The extracted surface could not be offset by " << offset << "." << endl;
+					cout << "The surface could not be offset by " << offset << "." << endl;
 					return NULL;
 				}
 				numOfPatchFaces = AddFacesToShell(offsetShape, builder, shell);
 			}
 			if (numOfPatchFaces > 0) builder.Add(compound, shell);
-			numOfExtractedFaces += numOfPatchFaces;
+			numOfOffsetFaces += numOfPatchFaces;
 		}
-		if (numOfExtractedFaces == 0)
+		if (numOfOffsetFaces == 0)
 		{
-			cout << "The extraction left no surface at all." << endl;
+			cout << "The face offset left no surface at all." << endl;
 			return NULL;
 		}
 		//
@@ -2849,19 +2849,19 @@ namespace nglib
 	}
 
 
-	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ExtractFaces(Ng_OCC_Geometry* geom, int* targetSolids,
-	                                                int* targetFaceCounts, int numOfTargetGroups,
-	                                                int* faceIds, double offset)
+	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_OffsetFaces(Ng_OCC_Geometry* geom, int* targetSolids,
+	                                               int* targetFaceCounts, int numOfTargetGroups,
+	                                               int* faceIds, double offset)
 	{
 		try
 		{
-			OCCGeometry* occgeom = ExtractFaces(geom, targetSolids, targetFaceCounts, numOfTargetGroups,
-			                                    faceIds, offset);
+			OCCGeometry* occgeom = OffsetFaces(geom, targetSolids, targetFaceCounts, numOfTargetGroups,
+			                                   faceIds, offset);
 			return ((Ng_OCC_Geometry*)occgeom);
 		}
 		catch (exception ex)
 		{
-			PrintMessage(1, "An error occurred in Ng_OCC_ExtractFaces.");
+			PrintMessage(1, "An error occurred in Ng_OCC_OffsetFaces.");
 		}
 		return NULL;
 	}
