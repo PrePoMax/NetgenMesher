@@ -1856,14 +1856,17 @@ namespace nglib
 	// are kept come first, in the order they had, and the shells of the opened solids follow in the same
 	// order, so a caller that is told which solids were opened can tell the pieces of the result apart;
 	// openedSolids receives their numbers, counted the way the explorer walks the solids, and may be NULL.
+	// A solid that loses every face is gone and leaves nothing in the result; removedSolids receives its
+	// number.
 	// The ids arrive grouped the way a face offset sends them: targetFaceCounts[i] of them are numbered
 	// inside solid targetSolids[i], and a solid of zero numbers them in the shape itself.
 	OCCGeometry * RemoveFaces(Ng_OCC_Geometry * geom, int * targetSolids, int * targetFaceCounts,
 	                          int numOfTargetGroups, int * faceIds, int * openedSolids, int maxOpenedSolids,
-	                          int * numOfOpenedSolids)
+	                          int * numOfOpenedSolids, int * removedSolids, int * numOfRemovedSolids)
 	{
 		OCCGeometry * occgeom = (OCCGeometry*)geom;
 		if (numOfOpenedSolids != NULL) *numOfOpenedSolids = 0;
+		if (numOfRemovedSolids != NULL) *numOfRemovedSolids = 0;
 		//
 		TopTools_IndexedMapOfShape removedFaces;
 		if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds, removedFaces))
@@ -1878,6 +1881,7 @@ namespace nglib
 		int numOfKeptFaces = 0;
 		vector<TopoDS_Shape> openedShells;
 		vector<int> openedSolidNumbers;
+		vector<int> removedSolidNumbers;
 		//
 		int solidNumber = 0;
 		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SOLID); exp0.More(); exp0.Next())
@@ -1889,14 +1893,14 @@ namespace nglib
 				numOfKeptFaces++;
 				continue;
 			}
-			// An opened solid is one body still, so it may neither vanish nor fall apart into pieces
+			// An opened solid is one body still, so it may not fall apart into pieces
 			TopoDS_Shell keptShell;
 			builder.MakeShell(keptShell);
 			int numOfSolidFaces = AddKeptFaces(exp0.Current(), removedFaces, builder, keptShell);
 			if (numOfSolidFaces == 0)
 			{
-				cout << "Deleting the selected faces would leave the solid " << solidNumber << " with no face." << endl;
-				return NULL;
+				removedSolidNumbers.push_back(solidNumber);
+				continue;
 			}
 			if (CountConnectedFaceGroups(keptShell) > CountConnectedFaceGroups(exp0.Current()))
 			{
@@ -1935,19 +1939,21 @@ namespace nglib
 		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_EDGE, TopAbs_FACE); exp0.More(); exp0.Next())
 			builder.Add(result, exp0.Current());
 		//
-		if (numOfKeptFaces == 0)
+		if (numOfKeptFaces == 0 && removedSolidNumbers.size() == 0)
 		{
 			cout << "Deleting the selected faces would leave no face at all." << endl;
 			return NULL;
 		}
 		// The result replaces the part it was taken from, so it may not fall apart into more pieces than
-		// the part had; faces that no longer touch would be one part that is several bodies
-		if (CountConnectedFaceGroups(result) > CountConnectedFaceGroups(occgeom->shape))
+		// the part had; faces that no longer touch would be one part that is several bodies. The solids of
+		// a compound are bodies of their own, and each opened one was checked by itself above
+		if (solidNumber <= 1 && CountConnectedFaceGroups(result) > CountConnectedFaceGroups(occgeom->shape))
 		{
 			cout << "Deleting the selected faces would divide the part into pieces that do not touch." << endl;
 			return NULL;
 		}
-		if (openedSolids != NULL && (int)openedSolidNumbers.size() > maxOpenedSolids)
+		if ((openedSolids != NULL && (int)openedSolidNumbers.size() > maxOpenedSolids) ||
+		    (removedSolids != NULL && (int)removedSolidNumbers.size() > maxOpenedSolids))
 		{
 			cout << "More solids were opened than the caller has room for." << endl;
 			return NULL;
@@ -1955,6 +1961,9 @@ namespace nglib
 		for (size_t i = 0; openedSolids != NULL && i < openedSolidNumbers.size(); i++)
 			openedSolids[i] = openedSolidNumbers[i];
 		if (numOfOpenedSolids != NULL) *numOfOpenedSolids = (int)openedSolidNumbers.size();
+		for (size_t i = 0; removedSolids != NULL && i < removedSolidNumbers.size(); i++)
+			removedSolids[i] = removedSolidNumbers[i];
+		if (numOfRemovedSolids != NULL) *numOfRemovedSolids = (int)removedSolidNumbers.size();
 		//
 		OCCGeometry * newoccgeo = new OCCGeometry;
 		newoccgeo->shape = result;
@@ -3035,12 +3044,14 @@ namespace nglib
 
 	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_RemoveFaces(Ng_OCC_Geometry* geom, int* targetSolids,
 	                                               int* targetFaceCounts, int numOfTargetGroups, int* faceIds,
-	                                               int* openedSolids, int maxOpenedSolids, int* numOfOpenedSolids)
+	                                               int* openedSolids, int maxOpenedSolids, int* numOfOpenedSolids,
+	                                               int* removedSolids, int* numOfRemovedSolids)
 	{
 		try
 		{
 			OCCGeometry* occgeom = RemoveFaces(geom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds,
-			                                   openedSolids, maxOpenedSolids, numOfOpenedSolids);
+			                                   openedSolids, maxOpenedSolids, numOfOpenedSolids, removedSolids,
+			                                   numOfRemovedSolids);
 			return ((Ng_OCC_Geometry*)occgeom);
 		}
 		catch (exception ex)

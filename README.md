@@ -60,13 +60,14 @@ faces and puts nothing in their place. The ids are grouped as `BREP_OFFSET_FACES
 are numbered inside that solid, in explorer order, or in the face map of the whole shape when the solid is 0. A
 solid that loses a face is no longer closed, so it is written as the shells that are left of it, each face keeping
 the orientation it had; a solid, shell or face that loses nothing is written as it was. The command fails when no
-face would be left, and when the faces left fall into more separate pieces, two faces being in one piece when
-they share an edge, than the shape had, because the result replaces one part and would be several bodies.
+face would be left, and when the faces left of a single part fall into more separate pieces, two faces being in
+one piece when they share an edge, than it had, because the result replaces one part and would be several bodies.
 PrePoMax runs it for Delete Faces of a CAD part. An opened solid is written as one shell, void shells included,
-and it may neither lose every face nor fall apart. `BREP_REMOVE_COMPOUND_FACES` takes the same arguments for a
+and may not fall apart; a solid that loses every face is gone. `BREP_REMOVE_COMPOUND_FACES` takes the same arguments for a
 compound of solids and writes the result in pieces: `<out.brep>` holds the solids that lost nothing, in their
 order, every opened solid is written as `<out>_000k.brep`, and `<out>.opened` names the input solid of each, one
-number per line. A face two solids share is deleted from both, so both are opened. PrePoMax keeps the compound
+number per line, and `<out>.removed` names the solids that lost every face. A face two solids share is deleted
+from both, so both are opened. PrePoMax keeps the compound
 of the kept solids and turns each opened solid into a shell part of its own.
 
 `BREP_MESH` reads two optional entries after `parallel_meshing_threads` in the mesh parameters file.

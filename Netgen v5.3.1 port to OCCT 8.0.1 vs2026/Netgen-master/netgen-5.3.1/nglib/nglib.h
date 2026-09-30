@@ -740,7 +740,7 @@ DLL_HEADER Ng_OCC_Geometry* Ng_OCC_ConvertToSolid(Ng_OCC_Geometry* geom);
 
 DLL_HEADER Ng_OCC_Geometry* Ng_OCC_OffsetFaces(Ng_OCC_Geometry* geom, int* targetSolids, int* targetFaceCounts, int numOfTargetGroups, int* faceIds, double offset);
 
-DLL_HEADER Ng_OCC_Geometry* Ng_OCC_RemoveFaces(Ng_OCC_Geometry* geom, int* targetSolids, int* targetFaceCounts, int numOfTargetGroups, int* faceIds, int* openedSolids, int maxOpenedSolids, int* numOfOpenedSolids);
+DLL_HEADER Ng_OCC_Geometry* Ng_OCC_RemoveFaces(Ng_OCC_Geometry* geom, int* targetSolids, int* targetFaceCounts, int numOfTargetGroups, int* faceIds, int* openedSolids, int maxOpenedSolids, int* numOfOpenedSolids, int* removedSolids, int* numOfRemovedSolids);
 
 #endif // OCCGEOMETRY
 

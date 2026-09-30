@@ -349,6 +349,7 @@ void PrintUsage(const char* exePath)
 	cout << "      As BREP_REMOVE_FACES, for a compound of solids: <out.brep> keeps the" << endl;
 	cout << "      solids that lost nothing, every opened solid is written as the shell" << endl;
 	cout << "      <out>_000k.brep and <out>.opened lists the solid each came from." << endl;
+	cout << "      A solid that loses every face is gone and listed in <out>.removed." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -1678,7 +1679,8 @@ bool OffsetFaces(int argc, char* argv[])
 // The face ids arrive grouped as BREP_OFFSET_FACES takes them. A solid that loses a face comes back as
 // the shell that is left of it, and everything that loses nothing comes back as it was. For a compound
 // the output holds only the solids that were kept, each opened solid is written beside it as
-// <out>_000k.brep, and <out>.opened names the solid each of those came from, one number per line
+// <out>_000k.brep, <out>.opened names the solid each of those came from, one number per line, and
+// <out>.removed names the solids that lost every face and are gone
 bool RemoveFaces(int argc, char* argv[], bool compound)
 {
 	try
@@ -1747,12 +1749,14 @@ bool RemoveFaces(int argc, char* argv[], bool compound)
 		TopTools_IndexedMapOfShape inputSolids;
 		if (BRepTools::Read(inputShape, argv[2], builder)) TopExp::MapShapes(inputShape, TopAbs_SOLID, inputSolids);
 		std::vector<int> openedSolids(inputSolids.Extent() + 1);
+		std::vector<int> removedSolids(inputSolids.Extent() + 1);
 		int numOfOpenedSolids = 0;
+		int numOfRemovedSolids = 0;
 		//
 		cout << "Ng_OCC_RemoveFaces" << endl;
 		occ_geom = Ng_OCC_RemoveFaces(occ_geom, targetSolids.data(), targetFaceCounts.data(), numOfTargetGroups,
 		                              faceIdList.data(), openedSolids.data(), (int)openedSolids.size(),
-		                              &numOfOpenedSolids);
+		                              &numOfOpenedSolids, removedSolids.data(), &numOfRemovedSolids);
 		if (!occ_geom)
 		{
 			cerr << "The selected faces could not be deleted." << endl;
@@ -1800,6 +1804,9 @@ bool RemoveFaces(int argc, char* argv[], bool compound)
 				}
 			}
 			openedFile.close();
+			ofstream removedFile(string(argv[3]) + ".removed");
+			for (int i = 0; i < numOfRemovedSolids; i++) removedFile << removedSolids[i] << endl;
+			removedFile.close();
 			if (child != numOfKeptSolids + numOfOpenedSolids)
 			{
 				cerr << "The compound holds more than its solids." << endl;
