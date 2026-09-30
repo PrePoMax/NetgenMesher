@@ -1796,6 +1796,138 @@ namespace nglib
 		//
 		return newoccgeo;
 	}
+	static bool ShapeHoldsAnyFace(const TopoDS_Shape & shape, const TopTools_IndexedMapOfShape & faces)
+	{
+		for (TopExp_Explorer exp0(shape, TopAbs_FACE); exp0.More(); exp0.Next())
+		{
+			if (faces.Contains(exp0.Current())) return true;
+		}
+		return false;
+	}
+	// The faces a shell keeps, each with the orientation it had in the shell, so that the edges they share
+	// stay shared and the normals point where they pointed. A shell left with no face is dropped.
+	static int AddKeptFacesAsShell(const TopoDS_Shape & shell, const TopTools_IndexedMapOfShape & removedFaces,
+	                               BRep_Builder & builder, TopoDS_Compound & result)
+	{
+		TopoDS_Shell keptShell;
+		builder.MakeShell(keptShell);
+		int numOfKeptFaces = 0;
+		for (TopExp_Explorer exp0(shell, TopAbs_FACE); exp0.More(); exp0.Next())
+		{
+			if (removedFaces.Contains(exp0.Current())) continue;
+			builder.Add(keptShell, exp0.Current());
+			numOfKeptFaces++;
+		}
+		if (numOfKeptFaces == 0) return 0;
+		//
+		keptShell.Closed(BRep_Tool::IsClosed(keptShell));
+		builder.Add(result, keptShell);
+		return numOfKeptFaces;
+	}
+	static int FindFaceGroup(vector<int> & groups, int i)
+	{
+		while (groups[i] != i) i = groups[i] = groups[groups[i]];
+		return i;
+	}
+	// The pieces the faces of a shape fall into, two faces being in one piece when they share an edge
+	static int CountConnectedFaceGroups(const TopoDS_Shape & shape)
+	{
+		TopTools_IndexedMapOfShape faces;
+		TopExp::MapShapes(shape, TopAbs_FACE, faces);
+		TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+		TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+		//
+		vector<int> groups(faces.Extent() + 1);
+		for (int i = 0; i <= faces.Extent(); i++) groups[i] = i;
+		int numOfGroups = faces.Extent();
+		for (int i = 1; i <= edgeFaces.Extent(); i++)
+		{
+			const TopTools_ListOfShape & edgeFaceList = edgeFaces(i);
+			int first = 0;
+			for (TopTools_ListIteratorOfListOfShape it(edgeFaceList); it.More(); it.Next())
+			{
+				int faceId = faces.FindIndex(it.Value());
+				if (faceId < 1) continue;
+				if (first == 0) { first = faceId; continue; }
+				int firstGroup = FindFaceGroup(groups, first);
+				int group = FindFaceGroup(groups, faceId);
+				if (firstGroup != group) { groups[group] = firstGroup; numOfGroups--; }
+			}
+		}
+		return numOfGroups;
+	}
+	// The named faces are taken out and nothing is put in their place. A solid that loses a face is no
+	// longer closed, so what is left of it is written as its shells; a solid, a shell or a face that loses
+	// nothing is written as it was, so a neighbour keeps the very faces and edges it shared. The ids arrive
+	// grouped the way a face offset sends them: targetFaceCounts[i] of them are numbered inside solid
+	// targetSolids[i], and a solid of zero numbers them in the shape itself.
+	OCCGeometry * RemoveFaces(Ng_OCC_Geometry * geom, int * targetSolids, int * targetFaceCounts,
+	                          int numOfTargetGroups, int * faceIds)
+	{
+		OCCGeometry * occgeom = (OCCGeometry*)geom;
+		//
+		TopTools_IndexedMapOfShape removedFaces;
+		if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds, removedFaces))
+		{
+			cout << "None of the selected faces was found in the geometry." << endl;
+			return NULL;
+		}
+		//
+		BRep_Builder builder;
+		TopoDS_Compound result;
+		builder.MakeCompound(result);
+		int numOfKeptFaces = 0;
+		//
+		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SOLID); exp0.More(); exp0.Next())
+		{
+			if (!ShapeHoldsAnyFace(exp0.Current(), removedFaces))
+			{
+				builder.Add(result, exp0.Current());
+				numOfKeptFaces++;
+				continue;
+			}
+			for (TopExp_Explorer exp1(exp0.Current(), TopAbs_SHELL); exp1.More(); exp1.Next())
+				numOfKeptFaces += AddKeptFacesAsShell(exp1.Current(), removedFaces, builder, result);
+		}
+		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SHELL, TopAbs_SOLID); exp0.More(); exp0.Next())
+		{
+			if (!ShapeHoldsAnyFace(exp0.Current(), removedFaces))
+			{
+				builder.Add(result, exp0.Current());
+				numOfKeptFaces++;
+				continue;
+			}
+			numOfKeptFaces += AddKeptFacesAsShell(exp0.Current(), removedFaces, builder, result);
+		}
+		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_FACE, TopAbs_SHELL); exp0.More(); exp0.Next())
+		{
+			if (removedFaces.Contains(exp0.Current())) continue;
+			builder.Add(result, exp0.Current());
+			numOfKeptFaces++;
+		}
+		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_EDGE, TopAbs_FACE); exp0.More(); exp0.Next())
+			builder.Add(result, exp0.Current());
+		//
+		if (numOfKeptFaces == 0)
+		{
+			cout << "Deleting the selected faces would leave no face at all." << endl;
+			return NULL;
+		}
+		// The result replaces the part it was taken from, so it may not fall apart into more pieces than
+		// the part had; faces that no longer touch would be one part that is several bodies
+		if (CountConnectedFaceGroups(result) > CountConnectedFaceGroups(occgeom->shape))
+		{
+			cout << "Deleting the selected faces would divide the part into pieces that do not touch." << endl;
+			return NULL;
+		}
+		//
+		OCCGeometry * newoccgeo = new OCCGeometry;
+		newoccgeo->shape = result;
+		newoccgeo->changed = 1;
+		newoccgeo->BuildFMap();
+		//
+		return newoccgeo;
+	}
 	bool WriteShapeToBrepFile(const TopoDS_Shape& shape, const char* filename, int numOfSplitFaces)
 	{
 		bool result = false;
@@ -2862,6 +2994,21 @@ namespace nglib
 		catch (exception ex)
 		{
 			PrintMessage(1, "An error occurred in Ng_OCC_OffsetFaces.");
+		}
+		return NULL;
+	}
+
+	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_RemoveFaces(Ng_OCC_Geometry* geom, int* targetSolids,
+	                                               int* targetFaceCounts, int numOfTargetGroups, int* faceIds)
+	{
+		try
+		{
+			OCCGeometry* occgeom = RemoveFaces(geom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds);
+			return ((Ng_OCC_Geometry*)occgeom);
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_RemoveFaces.");
 		}
 		return NULL;
 	}

@@ -80,6 +80,7 @@ bool DefeatureBrep(int argc, char* argv[]);
 bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool OffsetFaces(int argc, char* argv[]);
+bool RemoveFaces(int argc, char* argv[]);
 bool ConvertToSolid(int argc, char* argv[]);
 // Stl Mesh
 bool StlMesh(int argc, char* argv[]);
@@ -178,6 +179,7 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
 	else if (strcmp(argv[1], "BREP_OFFSET_FACES") == 0) return OffsetFaces(argc, argv);
+	else if (strcmp(argv[1], "BREP_REMOVE_FACES") == 0) return RemoveFaces(argc, argv);
 	// Stl Mesh
 	else if (strcmp(argv[1], "STL_MESH") == 0) return StlMesh(argc, argv);
 	else if (strcmp(argv[1], "STL_SURFACE_MESH") == 0) return StlSurfaceMesh(argc, argv);
@@ -335,6 +337,12 @@ void PrintUsage(const char* exePath)
 	cout << "      which divides nothing." << endl;
 	cout << "  BREP_DEFEATURE                     <in.brep> <out.brep> <faceId> [faceId ...]" << endl;
 	cout << "      Removes selected faces from one CAD solid and closes the gap." << endl;
+	cout << "  BREP_REMOVE_FACES                  <in.brep> <out.brep> <numOfGroups>" << endl;
+	cout << "                                     {<solid> <numOfFaces> <faceId> ...}" << endl;
+	cout << "      Deletes the faces and leaves the gap open. A solid that loses a" << endl;
+	cout << "      face comes back as the shells that are left of it. The face ids of" << endl;
+	cout << "      a group are numbered inside that solid, or in the shape when it is 0." << endl;
+	cout << "      Fails when the faces left would fall into more separate pieces." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -1658,6 +1666,101 @@ bool OffsetFaces(int argc, char* argv[])
 	}
 	catch (exception ex)
 	{
+		return 1;
+	}
+}
+// The face ids arrive grouped as BREP_OFFSET_FACES takes them. A solid that loses a face comes back as
+// the open shells that are left of it, and everything that loses nothing comes back as it was
+bool RemoveFaces(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 7)
+		{
+			cerr << "BREP_REMOVE_FACES takes an input file, an output file and the number of face groups, each"
+			     << " written as a solid number, a face count and that many face ids." << endl;
+			return 1;
+		}
+		std::string::size_type sz;     // alias of size_t
+		int numOfTargetGroups = std::stoi(argv[4], &sz);
+		if (numOfTargetGroups < 1)
+		{
+			cerr << "BREP_REMOVE_FACES takes at least one face group." << endl;
+			return 1;
+		}
+		//
+		std::vector<int> targetSolids;
+		std::vector<int> targetFaceCounts;
+		std::vector<int> faceIdList;
+		int argument = 5;
+		for (int group = 0; group < numOfTargetGroups; group++)
+		{
+			if (argument + 1 >= argc)
+			{
+				cerr << "BREP_REMOVE_FACES was given fewer face groups than it was told to expect." << endl;
+				return 1;
+			}
+			targetSolids.push_back(std::stoi(argv[argument++], &sz));
+			targetFaceCounts.push_back(std::stoi(argv[argument++], &sz));
+			for (int i = 0; i < targetFaceCounts[group]; i++)
+			{
+				if (argument >= argc)
+				{
+					cerr << "BREP_REMOVE_FACES was given fewer face ids than it was told to expect." << endl;
+					return 1;
+				}
+				faceIdList.push_back(std::stoi(argv[argument++], &sz));
+			}
+		}
+		if (faceIdList.size() == 0)
+		{
+			cerr << "No face id was given." << endl;
+			return 1;
+		}
+		// Initialise the Netgen Core library
+		Ng_Init();
+		// Read in the OCC File
+		cout << "Ng_OCC_Load_BREP" << endl;
+		Ng_OCC_Geometry * occ_geom = Ng_OCC_Load_BREP(argv[2]);
+		if (!occ_geom)
+		{
+			cout << "Error reading in BREP File: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Successfully loaded BREP File: " << argv[2] << endl;
+		//
+		TopTools_IndexedMapOfShape removalFMap;
+		Ng_OCC_TopTools_IndexedMapOfShape * occ_removal_fmap = (Ng_OCC_TopTools_IndexedMapOfShape*)&removalFMap;
+		Ng_OCC_GetFMap(occ_geom, occ_removal_fmap);
+		int numOfFacesBefore = removalFMap.Extent();
+		//
+		cout << "Ng_OCC_RemoveFaces" << endl;
+		occ_geom = Ng_OCC_RemoveFaces(occ_geom, targetSolids.data(), targetFaceCounts.data(), numOfTargetGroups,
+		                              faceIdList.data());
+		if (!occ_geom)
+		{
+			cerr << "The selected faces could not be deleted." << endl;
+			return 1;
+		}
+		//
+		removalFMap.Clear();
+		Ng_OCC_GetFMap(occ_geom, occ_removal_fmap);
+		if (removalFMap.Extent() >= numOfFacesBefore)
+		{
+			cerr << "No face was deleted from the geometry." << endl;
+			return 1;
+		}
+		// Save
+		cout << "Ng_OCC_Save_BREP" << endl;
+		Ng_OCC_Save_BREP(occ_geom, argv[3]);
+		//
+		cout << "Remove faces finished successfully: " << numOfFacesBefore - removalFMap.Extent()
+		     << " faces were removed." << endl;
+		return 0;
+	}
+	catch (const std::exception& e)
+	{
+		cerr << "Error: " << e.what() << endl;
 		return 1;
 	}
 }

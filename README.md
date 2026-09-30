@@ -55,6 +55,15 @@ through three blind holes and merged back has the faces, edges and vertices it h
 that do not all share faces cannot become one solid and are refused, as is a result that is not a valid
 solid; the command fails when the result has as many faces as before. PrePoMax runs it for Fuse Cells.
 
+`BREP_REMOVE_FACES <in.brep> <out.brep> <numOfGroups> {<solid> <numOfFaces> <faceId> ...}` deletes the named
+faces and puts nothing in their place. The ids are grouped as `BREP_OFFSET_FACES` takes them: the ids of a group
+are numbered inside that solid, in explorer order, or in the face map of the whole shape when the solid is 0. A
+solid that loses a face is no longer closed, so it is written as the shells that are left of it, each face keeping
+the orientation it had; a solid, shell or face that loses nothing is written as it was. The command fails when no
+face would be left, and when the faces left fall into more separate pieces, two faces being in one piece when
+they share an edge, than the shape had, because the result replaces one part and would be several bodies.
+PrePoMax runs it for Delete Faces of a CAD part.
+
 `BREP_MESH` reads two optional entries after `parallel_meshing_threads` in the mesh parameters file.
 `transfinite_faces` meshes 4-sided faces as structured triangle grids when the edge meshing put the
 same number of segments on their opposite sides: 0 none, 1 size checked - those whose grid passes the
