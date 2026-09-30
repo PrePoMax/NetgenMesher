@@ -36,6 +36,12 @@
 #include "BRepCheck_Analyzer.hxx"
 #include "Standard_Failure.hxx"
 #include "GCPnts_TangentialDeflection.hxx"
+#include "gp_Trsf.hxx"
+#include "gp_GTrsf.hxx"
+#include "gp_Ax1.hxx"
+#include "gp_Ax2.hxx"
+#include "BRepBuilderAPI_Transform.hxx"
+#include "BRepBuilderAPI_GTransform.hxx"
 
 #include "windows.h"
 //#include "nglib.h"
@@ -64,7 +70,7 @@ bool SaveBrepAsStep(int argc, char* argv[]);
 // Visualization
 bool OccVisualization(int argc, char* argv[]);
 // Geometry operations
-bool ScaleGeometry(int argc, char* argv[]);
+bool TransformGeometry(int argc, char* argv[]);
 bool ReverseBrepFaceOrientations(int argc, char* argv[]);
 bool SplitAFaceUsingTwoPoints(int argc, char* argv[]);
 bool SplitGeometry(int argc, char* argv[], bool preview);
@@ -114,12 +120,9 @@ char** ReadDataFile(int &argc, char* argv[]);
 //BREP_VISUALIZATION C:\Temp\Partition_out_1.brep C:\Temp\geometry.vis 0.01
 //BREP_VISUALIZATION C:\Temp\edge.brep C:\Temp\geometry.vis 0.01 
 //
-//BREP_SCALE_GEOMETRY C:\Temp\scale.brep C:\Temp\scale_out.brep 0 0 0 10 10 10
+//BREP_TRANSFORM C:\Temp\scale.brep C:\Temp\scale_out.brep C:\Temp\transform
 //
 //SAVE_BREP_AS_STEP "C:\Temp\geometry.brep" "C:\Temp\geometry.step"
-//
-//BREP_SCALE_GEOMETRY "C:\\Temp\\geometry.brep\" "C:\\Temp\\geometry.brep\" 0 0 0 1 1 1
-//BREP_SCALE_GEOMETRY "C:\Temp\geometry.brep" "C:\Temp\geometry.brep" 0 0 0 1 1 1
 //
 //STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS "C:\Temp\ptc.stp" "C:\Temp\geometry.brep"
 //BREP_CONVERT_SOLID_TO_SHELL "C:\Temp\solidBox.brep" "C:\Temp\geometry.brep"
@@ -163,7 +166,7 @@ static int RunCommand(int argc, char* argv[])
 	// Visualization
 	else if (strcmp(argv[1], "BREP_VISUALIZATION") == 0) return OccVisualization(argc, argv);
 	// Geometry operations
-	else if (strcmp(argv[1], "BREP_SCALE_GEOMETRY") == 0) return ScaleGeometry(argc, argv);
+	else if (strcmp(argv[1], "BREP_TRANSFORM") == 0) return TransformGeometry(argc, argv);
 	else if (strcmp(argv[1], "BREP_REVERSE_FACES") == 0) return ReverseBrepFaceOrientations(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT_A_FACE_USING_TWO_POINTS") == 0) return SplitAFaceUsingTwoPoints(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT") == 0) return SplitGeometry(argc, argv, false);
@@ -265,8 +268,22 @@ void PrintUsage(const char* exePath)
 	cout << "      relative: 0 = absolute deflection, non-zero = relative to size." << endl;
 	cout << endl;
 	cout << "Geometry operations" << endl;
-	cout << "  BREP_SCALE_GEOMETRY                <in.brep> <out.brep> <Tx> <Ty> <Tz>" << endl;
-	cout << "                                     <scaleX> <scaleY> <scaleZ>" << endl;
+	cout << "  BREP_TRANSFORM                     <in.brep> <out.brep> <transformDefinition>" << endl;
+	cout << "      <transformDefinition> is a text file of <property>: <values> lines" << endl;
+	cout << "        Transform type: Translate | Rotate | Mirror | Scale" << endl;
+	cout << "        Point: x y z          centre of the rotation or the scaling, or a point" << endl;
+	cout << "                              on the mirror plane" << endl;
+	cout << "        Direction: x y z      translation vector, rotation axis or mirror" << endl;
+	cout << "                              plane normal" << endl;
+	cout << "        Angle: <degrees>      rotation angle, right handed about the axis" << endl;
+	cout << "        Factors: sx sy sz     scale factors" << endl;
+	cout << "        Number of copies: <n> (optional, Translate and Rotate)" << endl;
+	cout << "          0, the default, transforms the shape into <out.brep>; n > 0 writes" << endl;
+	cout << "          copy k, transformed k times, to <out>_000k.brep and leaves" << endl;
+	cout << "          <out.brep> alone" << endl;
+	cout << "      Every transform keeps the order of the faces, edges and vertices, so" << endl;
+	cout << "      their ids stay what they were; a non-uniform scale turns the curves" << endl;
+	cout << "      and surfaces into splines, every other transform keeps them exact." << endl;
 	cout << "  BREP_REVERSE_FACES                 <in.brep> <out.brep>" << endl;
 	cout << "  BREP_SPLIT_A_FACE_USING_TWO_POINTS <in.brep> <out.brep> <faceId>" << endl;
 	cout << "                                     <x1> <y1> <z1> <x2> <y2> <z2>" << endl;
@@ -537,50 +554,6 @@ bool OccVisualization(int argc, char* argv[])
 	return 0;
 }
 // Geometry operations
-bool ScaleGeometry(int argc, char* argv[])
-{
-	try
-	{
-		//Define pointer to OCC Geometry
-		Ng_OCC_Geometry *occ_geom;
-		// Result of Netgen Operations
-		Ng_Result ng_res;
-		int np, ne;
-		// Initialise the Netgen Core library
-		Ng_Init();
-		// Read in the OCC File
-		cout << "Ng_OCC_Load_BREP" << endl;
-		occ_geom = Ng_OCC_Load_BREP(argv[2]);
-		if (!occ_geom)
-		{
-			cout << "Error reading in BREP File: " << argv[2] << endl;
-			return 1;
-		}
-		cout << "Successfully loaded BREP File: " << argv[2] << endl;
-		//
-		std::string::size_type sz;     // alias of size_t
-		double Tx = std::stod(argv[4], &sz);
-		double Ty = std::stod(argv[5], &sz);
-		double Tz = std::stod(argv[6], &sz);
-		double scaleX = std::stod(argv[7], &sz);
-		double scaleY = std::stod(argv[8], &sz);
-		double scaleZ = std::stod(argv[9], &sz);
-		//
-		cout << "Ng_OCC_ScaleGeometry" << endl;
-		occ_geom = Ng_OCC_ScaleGeometry(occ_geom, Tx, Ty, Tz, scaleX, scaleY, scaleZ);
-		// Save
-		cout << "Ng_OCC_Save_BREP" << endl;
-		Ng_OCC_Save_BREP(occ_geom, argv[3]);
-		//
-		cout << "Scale geometry finished successfully." << endl;
-		//
-		return 0;
-	}
-	catch (exception ex)
-	{
-		return 1;
-	}
-}
 bool ReverseBrepFaceOrientations(int argc, char* argv[])
 {
 	try
@@ -696,6 +669,163 @@ static void ReadToolValues(const string & text, double * values, int numOfValues
 {
 	istringstream stream(text);
 	for (int i = 0; i < numOfValues; i++) stream >> values[i];
+}
+// Copy k of a pattern is written next to the output file, as <out>_000k.brep, the way the parts of a split
+// assembly are
+static string PatternCopyFileName(const string & outputFileName, int copy)
+{
+	size_t slash = outputFileName.find_last_of("\\/");
+	size_t dot = outputFileName.find_last_of('.');
+	if (dot == string::npos || (slash != string::npos && dot < slash)) dot = outputFileName.size();
+	char suffix[16];
+	snprintf(suffix, sizeof(suffix), "_%04d", copy);
+	return outputFileName.substr(0, dot) + suffix + outputFileName.substr(dot);
+}
+// A move, a rotation, a mirror and a uniform scale keep every curve and surface of its kind, so they are
+// applied exactly; only a non-uniform scale needs the general transformation, which turns them into splines.
+// Both rebuild the shape through the same modifier, so the order of its faces, edges and vertices is kept
+static TopoDS_Shape TransformShape(const TopoDS_Shape & shape, const string & transformType, const double point[3],
+								   const double direction[3], double angle, const double factors[3], int step)
+{
+	gp_Pnt origin(point[0], point[1], point[2]);
+	gp_Vec vector(direction[0], direction[1], direction[2]);
+	gp_Trsf trsf;
+	if (transformType == "translate") trsf.SetTranslation(vector * step);
+	else if (transformType == "rotate") trsf.SetRotation(gp_Ax1(origin, gp_Dir(vector)), angle * step);
+	else if (transformType == "mirror") trsf.SetMirror(gp_Ax2(origin, gp_Dir(vector)));
+	else if (factors[0] == factors[1] && factors[1] == factors[2]) trsf.SetScale(origin, factors[0]);
+	else
+	{
+		gp_Trsf toZero;
+		toZero.SetTranslation(origin, gp_Pnt(0, 0, 0));
+		gp_Trsf toPoint;
+		toPoint.SetTranslation(gp_Pnt(0, 0, 0), origin);
+		gp_GTrsf scale;
+		scale.SetValue(1, 1, factors[0]);
+		scale.SetValue(2, 2, factors[1]);
+		scale.SetValue(3, 3, factors[2]);
+		gp_GTrsf gTrsf = gp_GTrsf(toPoint) * scale * gp_GTrsf(toZero);
+		BRepBuilderAPI_GTransform gTransform(shape, gTrsf, Standard_True);
+		return gTransform.Shape();
+	}
+	BRepBuilderAPI_Transform transform(shape, trsf, Standard_True);
+	return transform.Shape();
+}
+// Translate, rotate, mirror or scale a shape as the transform definition file says. The transformed shape
+// has as many faces as the given one, in the same order, so a part rebuilt from it keeps every id it had
+bool TransformGeometry(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 5)
+		{
+			cerr << "The BREP_TRANSFORM command needs an input file, an output file and a transform definition "
+			     << "file." << endl;
+			return 1;
+		}
+		BRep_Builder builder;
+		TopoDS_Shape inputShape;
+		if (!BRepTools::Read(inputShape, argv[2], builder))
+		{
+			cerr << "Error reading BREP file: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Successfully loaded BREP File: " << argv[2] << endl;
+		// Read the transform definition
+		ifstream definitionFile(argv[4]);
+		if (!definitionFile)
+		{
+			cerr << "Error reading the transform definition file: " << argv[4] << endl;
+			return 1;
+		}
+		//
+		string transformType;
+		double point[3] = { 0, 0, 0 };
+		double direction[3] = { 0, 0, 0 };
+		double angleDeg = 0;
+		double factors[3] = { 1, 1, 1 };
+		int numOfCopies = 0;
+		//
+		string line;
+		while (getline(definitionFile, line))
+		{
+			size_t colon = line.find(':');
+			if (colon == string::npos) continue;
+			string key = ToolKeyFromText(line.substr(0, colon));
+			string value = TrimToolText(line.substr(colon + 1));
+			//
+			if (key == "transformtype") transformType = ToolKeyFromText(value);
+			else if (key == "point") ReadToolValues(value, point, 3);
+			else if (key == "direction") ReadToolValues(value, direction, 3);
+			else if (key == "angle") angleDeg = stod(value);
+			else if (key == "factors") ReadToolValues(value, factors, 3);
+			else if (key == "numberofcopies") numOfCopies = stoi(value);
+		}
+		//
+		if (transformType != "translate" && transformType != "rotate" && transformType != "mirror" &&
+			transformType != "scale")
+		{
+			cerr << "The transform type must be Translate, Rotate, Mirror or Scale." << endl;
+			return 1;
+		}
+		double length = sqrt(direction[0] * direction[0] + direction[1] * direction[1] +
+							 direction[2] * direction[2]);
+		if (transformType != "scale" && length < gp::Resolution())
+		{
+			cerr << "The direction of the transform must not be a zero vector." << endl;
+			return 1;
+		}
+		if (transformType == "scale" && (factors[0] == 0 || factors[1] == 0 || factors[2] == 0))
+		{
+			cerr << "The scale factors must not be zero." << endl;
+			return 1;
+		}
+		if (numOfCopies < 0 ||
+			(numOfCopies > 1 && transformType != "translate" && transformType != "rotate"))
+		{
+			cerr << "The number of copies must be 0 or larger, and only Translate and Rotate make more than "
+			     << "one." << endl;
+			return 1;
+		}
+		//
+		TopTools_IndexedMapOfShape inputFaces;
+		TopExp::MapShapes(inputShape, TopAbs_FACE, inputFaces);
+		double angle = angleDeg * M_PI / 180;
+		int numOfShapes = numOfCopies == 0 ? 1 : numOfCopies;
+		for (int step = 1; step <= numOfShapes; step++)
+		{
+			TopoDS_Shape result = TransformShape(inputShape, transformType, point, direction, angle, factors,
+												 step);
+			TopTools_IndexedMapOfShape resultFaces;
+			TopExp::MapShapes(result, TopAbs_FACE, resultFaces);
+			if (result.IsNull() || resultFaces.Extent() != inputFaces.Extent())
+			{
+				cerr << "The transform did not return the shape it was given." << endl;
+				return 1;
+			}
+			//
+			string fileName = numOfCopies == 0 ? string(argv[3]) : PatternCopyFileName(argv[3], step);
+			if (!BRepTools::Write(result, fileName.c_str()))
+			{
+				cerr << "Error writing BREP file: " << fileName << endl;
+				return 1;
+			}
+		}
+		//
+		if (numOfCopies == 0) cout << "Transform geometry finished successfully." << endl;
+		else cout << "Transform geometry finished successfully: " << numOfCopies << " copies were written." << endl;
+		return 0;
+	}
+	catch (const Standard_Failure & error)
+	{
+		cerr << "The transform failed: " << error.GetMessageString() << endl;
+		return 1;
+	}
+	catch (const std::exception & error)
+	{
+		cerr << "The transform failed: " << error.what() << endl;
+		return 1;
+	}
 }
 // The solids that are left keep their shapes, so a part built from one of them keeps every id
 // the geometry gave it and PrePoMax can leave the part it already holds alone
