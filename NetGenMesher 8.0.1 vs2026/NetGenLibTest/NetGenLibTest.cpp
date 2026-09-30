@@ -42,6 +42,7 @@
 #include "gp_Ax2.hxx"
 #include "BRepBuilderAPI_Transform.hxx"
 #include "BRepBuilderAPI_GTransform.hxx"
+#include "TopoDS_Iterator.hxx"
 
 #include "windows.h"
 //#include "nglib.h"
@@ -80,7 +81,7 @@ bool DefeatureBrep(int argc, char* argv[]);
 bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool OffsetFaces(int argc, char* argv[]);
-bool RemoveFaces(int argc, char* argv[]);
+bool RemoveFaces(int argc, char* argv[], bool compound);
 bool ConvertToSolid(int argc, char* argv[]);
 // Stl Mesh
 bool StlMesh(int argc, char* argv[]);
@@ -179,7 +180,8 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
 	else if (strcmp(argv[1], "BREP_OFFSET_FACES") == 0) return OffsetFaces(argc, argv);
-	else if (strcmp(argv[1], "BREP_REMOVE_FACES") == 0) return RemoveFaces(argc, argv);
+	else if (strcmp(argv[1], "BREP_REMOVE_FACES") == 0) return RemoveFaces(argc, argv, false);
+	else if (strcmp(argv[1], "BREP_REMOVE_COMPOUND_FACES") == 0) return RemoveFaces(argc, argv, true);
 	// Stl Mesh
 	else if (strcmp(argv[1], "STL_MESH") == 0) return StlMesh(argc, argv);
 	else if (strcmp(argv[1], "STL_SURFACE_MESH") == 0) return StlSurfaceMesh(argc, argv);
@@ -343,6 +345,10 @@ void PrintUsage(const char* exePath)
 	cout << "      face comes back as the shells that are left of it. The face ids of" << endl;
 	cout << "      a group are numbered inside that solid, or in the shape when it is 0." << endl;
 	cout << "      Fails when the faces left would fall into more separate pieces." << endl;
+	cout << "  BREP_REMOVE_COMPOUND_FACES         <in.brep> <out.brep> <numOfGroups> {...}" << endl;
+	cout << "      As BREP_REMOVE_FACES, for a compound of solids: <out.brep> keeps the" << endl;
+	cout << "      solids that lost nothing, every opened solid is written as the shell" << endl;
+	cout << "      <out>_000k.brep and <out>.opened lists the solid each came from." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -1670,8 +1676,10 @@ bool OffsetFaces(int argc, char* argv[])
 	}
 }
 // The face ids arrive grouped as BREP_OFFSET_FACES takes them. A solid that loses a face comes back as
-// the open shells that are left of it, and everything that loses nothing comes back as it was
-bool RemoveFaces(int argc, char* argv[])
+// the shell that is left of it, and everything that loses nothing comes back as it was. For a compound
+// the output holds only the solids that were kept, each opened solid is written beside it as
+// <out>_000k.brep, and <out>.opened names the solid each of those came from, one number per line
+bool RemoveFaces(int argc, char* argv[], bool compound)
 {
 	try
 	{
@@ -1734,9 +1742,17 @@ bool RemoveFaces(int argc, char* argv[])
 		Ng_OCC_GetFMap(occ_geom, occ_removal_fmap);
 		int numOfFacesBefore = removalFMap.Extent();
 		//
+		BRep_Builder builder;
+		TopoDS_Shape inputShape;
+		TopTools_IndexedMapOfShape inputSolids;
+		if (BRepTools::Read(inputShape, argv[2], builder)) TopExp::MapShapes(inputShape, TopAbs_SOLID, inputSolids);
+		std::vector<int> openedSolids(inputSolids.Extent() + 1);
+		int numOfOpenedSolids = 0;
+		//
 		cout << "Ng_OCC_RemoveFaces" << endl;
 		occ_geom = Ng_OCC_RemoveFaces(occ_geom, targetSolids.data(), targetFaceCounts.data(), numOfTargetGroups,
-		                              faceIdList.data());
+		                              faceIdList.data(), openedSolids.data(), (int)openedSolids.size(),
+		                              &numOfOpenedSolids);
 		if (!occ_geom)
 		{
 			cerr << "The selected faces could not be deleted." << endl;
@@ -1753,6 +1769,48 @@ bool RemoveFaces(int argc, char* argv[])
 		// Save
 		cout << "Ng_OCC_Save_BREP" << endl;
 		Ng_OCC_Save_BREP(occ_geom, argv[3]);
+		// The kept solids come first in the result and one shell for every opened solid follows them
+		if (compound)
+		{
+			TopoDS_Shape result;
+			if (!BRepTools::Read(result, argv[3], builder))
+			{
+				cerr << "Error reading BREP file: " << argv[3] << endl;
+				return 1;
+			}
+			int numOfKeptSolids = 0;
+			for (TopExp_Explorer exp0(result, TopAbs_SOLID); exp0.More(); exp0.Next()) numOfKeptSolids++;
+			//
+			TopoDS_Compound keptSolids;
+			builder.MakeCompound(keptSolids);
+			ofstream openedFile(string(argv[3]) + ".opened");
+			int child = 0;
+			for (TopoDS_Iterator it(result); it.More(); it.Next(), child++)
+			{
+				if (child < numOfKeptSolids) builder.Add(keptSolids, it.Value());
+				else if (child < numOfKeptSolids + numOfOpenedSolids)
+				{
+					int opened = child - numOfKeptSolids;
+					if (!BRepTools::Write(it.Value(), PatternCopyFileName(argv[3], opened + 1).c_str()))
+					{
+						cerr << "Error writing the opened solid " << openedSolids[opened] << "." << endl;
+						return 1;
+					}
+					openedFile << openedSolids[opened] << endl;
+				}
+			}
+			openedFile.close();
+			if (child != numOfKeptSolids + numOfOpenedSolids)
+			{
+				cerr << "The compound holds more than its solids." << endl;
+				return 1;
+			}
+			if (!BRepTools::Write(keptSolids, argv[3]))
+			{
+				cerr << "Error writing BREP file: " << argv[3] << endl;
+				return 1;
+			}
+		}
 		//
 		cout << "Remove faces finished successfully: " << numOfFacesBefore - removalFMap.Extent()
 		     << " faces were removed." << endl;

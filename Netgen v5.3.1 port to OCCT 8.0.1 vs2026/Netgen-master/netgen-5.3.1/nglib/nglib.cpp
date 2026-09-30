@@ -1804,24 +1804,18 @@ namespace nglib
 		}
 		return false;
 	}
-	// The faces a shell keeps, each with the orientation it had in the shell, so that the edges they share
-	// stay shared and the normals point where they pointed. A shell left with no face is dropped.
-	static int AddKeptFacesAsShell(const TopoDS_Shape & shell, const TopTools_IndexedMapOfShape & removedFaces,
-	                               BRep_Builder & builder, TopoDS_Compound & result)
+	// The faces a shape keeps, each with the orientation it had in it, so that the edges they share stay shared
+	// and the normals point where they pointed
+	static int AddKeptFaces(const TopoDS_Shape & shape, const TopTools_IndexedMapOfShape & removedFaces,
+	                        BRep_Builder & builder, TopoDS_Shell & keptShell)
 	{
-		TopoDS_Shell keptShell;
-		builder.MakeShell(keptShell);
 		int numOfKeptFaces = 0;
-		for (TopExp_Explorer exp0(shell, TopAbs_FACE); exp0.More(); exp0.Next())
+		for (TopExp_Explorer exp0(shape, TopAbs_FACE); exp0.More(); exp0.Next())
 		{
 			if (removedFaces.Contains(exp0.Current())) continue;
 			builder.Add(keptShell, exp0.Current());
 			numOfKeptFaces++;
 		}
-		if (numOfKeptFaces == 0) return 0;
-		//
-		keptShell.Closed(BRep_Tool::IsClosed(keptShell));
-		builder.Add(result, keptShell);
 		return numOfKeptFaces;
 	}
 	static int FindFaceGroup(vector<int> & groups, int i)
@@ -1857,14 +1851,19 @@ namespace nglib
 		return numOfGroups;
 	}
 	// The named faces are taken out and nothing is put in their place. A solid that loses a face is no
-	// longer closed, so what is left of it is written as its shells; a solid, a shell or a face that loses
-	// nothing is written as it was, so a neighbour keeps the very faces and edges it shared. The ids arrive
-	// grouped the way a face offset sends them: targetFaceCounts[i] of them are numbered inside solid
-	// targetSolids[i], and a solid of zero numbers them in the shape itself.
+	// longer closed, so what is left of it is written as one shell; a solid, a shell or a face that loses
+	// nothing is written as it was, so a neighbour keeps the very faces and edges it shared. The solids that
+	// are kept come first, in the order they had, and the shells of the opened solids follow in the same
+	// order, so a caller that is told which solids were opened can tell the pieces of the result apart;
+	// openedSolids receives their numbers, counted the way the explorer walks the solids, and may be NULL.
+	// The ids arrive grouped the way a face offset sends them: targetFaceCounts[i] of them are numbered
+	// inside solid targetSolids[i], and a solid of zero numbers them in the shape itself.
 	OCCGeometry * RemoveFaces(Ng_OCC_Geometry * geom, int * targetSolids, int * targetFaceCounts,
-	                          int numOfTargetGroups, int * faceIds)
+	                          int numOfTargetGroups, int * faceIds, int * openedSolids, int maxOpenedSolids,
+	                          int * numOfOpenedSolids)
 	{
 		OCCGeometry * occgeom = (OCCGeometry*)geom;
+		if (numOfOpenedSolids != NULL) *numOfOpenedSolids = 0;
 		//
 		TopTools_IndexedMapOfShape removedFaces;
 		if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds, removedFaces))
@@ -1877,18 +1876,40 @@ namespace nglib
 		TopoDS_Compound result;
 		builder.MakeCompound(result);
 		int numOfKeptFaces = 0;
+		vector<TopoDS_Shape> openedShells;
+		vector<int> openedSolidNumbers;
 		//
+		int solidNumber = 0;
 		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SOLID); exp0.More(); exp0.Next())
 		{
+			solidNumber++;
 			if (!ShapeHoldsAnyFace(exp0.Current(), removedFaces))
 			{
 				builder.Add(result, exp0.Current());
 				numOfKeptFaces++;
 				continue;
 			}
-			for (TopExp_Explorer exp1(exp0.Current(), TopAbs_SHELL); exp1.More(); exp1.Next())
-				numOfKeptFaces += AddKeptFacesAsShell(exp1.Current(), removedFaces, builder, result);
+			// An opened solid is one body still, so it may neither vanish nor fall apart into pieces
+			TopoDS_Shell keptShell;
+			builder.MakeShell(keptShell);
+			int numOfSolidFaces = AddKeptFaces(exp0.Current(), removedFaces, builder, keptShell);
+			if (numOfSolidFaces == 0)
+			{
+				cout << "Deleting the selected faces would leave the solid " << solidNumber << " with no face." << endl;
+				return NULL;
+			}
+			if (CountConnectedFaceGroups(keptShell) > CountConnectedFaceGroups(exp0.Current()))
+			{
+				cout << "Deleting the selected faces would divide the solid " << solidNumber
+				     << " into pieces that do not touch." << endl;
+				return NULL;
+			}
+			keptShell.Closed(BRep_Tool::IsClosed(keptShell));
+			openedShells.push_back(keptShell);
+			openedSolidNumbers.push_back(solidNumber);
+			numOfKeptFaces += numOfSolidFaces;
 		}
+		for (size_t i = 0; i < openedShells.size(); i++) builder.Add(result, openedShells[i]);
 		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_SHELL, TopAbs_SOLID); exp0.More(); exp0.Next())
 		{
 			if (!ShapeHoldsAnyFace(exp0.Current(), removedFaces))
@@ -1897,7 +1918,13 @@ namespace nglib
 				numOfKeptFaces++;
 				continue;
 			}
-			numOfKeptFaces += AddKeptFacesAsShell(exp0.Current(), removedFaces, builder, result);
+			TopoDS_Shell keptShell;
+			builder.MakeShell(keptShell);
+			int numOfShellFaces = AddKeptFaces(exp0.Current(), removedFaces, builder, keptShell);
+			if (numOfShellFaces == 0) continue;
+			keptShell.Closed(BRep_Tool::IsClosed(keptShell));
+			builder.Add(result, keptShell);
+			numOfKeptFaces += numOfShellFaces;
 		}
 		for (TopExp_Explorer exp0(occgeom->shape, TopAbs_FACE, TopAbs_SHELL); exp0.More(); exp0.Next())
 		{
@@ -1920,6 +1947,14 @@ namespace nglib
 			cout << "Deleting the selected faces would divide the part into pieces that do not touch." << endl;
 			return NULL;
 		}
+		if (openedSolids != NULL && (int)openedSolidNumbers.size() > maxOpenedSolids)
+		{
+			cout << "More solids were opened than the caller has room for." << endl;
+			return NULL;
+		}
+		for (size_t i = 0; openedSolids != NULL && i < openedSolidNumbers.size(); i++)
+			openedSolids[i] = openedSolidNumbers[i];
+		if (numOfOpenedSolids != NULL) *numOfOpenedSolids = (int)openedSolidNumbers.size();
 		//
 		OCCGeometry * newoccgeo = new OCCGeometry;
 		newoccgeo->shape = result;
@@ -2999,11 +3034,13 @@ namespace nglib
 	}
 
 	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_RemoveFaces(Ng_OCC_Geometry* geom, int* targetSolids,
-	                                               int* targetFaceCounts, int numOfTargetGroups, int* faceIds)
+	                                               int* targetFaceCounts, int numOfTargetGroups, int* faceIds,
+	                                               int* openedSolids, int maxOpenedSolids, int* numOfOpenedSolids)
 	{
 		try
 		{
-			OCCGeometry* occgeom = RemoveFaces(geom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds);
+			OCCGeometry* occgeom = RemoveFaces(geom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds,
+			                                   openedSolids, maxOpenedSolids, numOfOpenedSolids);
 			return ((Ng_OCC_Geometry*)occgeom);
 		}
 		catch (exception ex)
