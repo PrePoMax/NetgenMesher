@@ -1678,6 +1678,9 @@ namespace netgen
 		}
 		ShapeUpgrade_UnifySameDomain unifyFaces(mergedSolid, Standard_False, Standard_True, Standard_False);
 		unifyFaces.KeepShapes(keepEdges);
+		// The faces a merge keeps from another solid share its edges, which only gain a curve on the merged face;
+		// copied instead, as the safe mode copies what it touches, they would no longer be the edges shared
+		unifyFaces.SetSafeInputMode(false);
 		unifyFaces.Build();
 		//
 		TopTools_MapOfShape keepVertices;
@@ -1692,6 +1695,7 @@ namespace netgen
 		for (int i = 1; i <= shapes.Extent(); i++) if (otherShapes.Contains(shapes(i))) keepVertices.Add(shapes(i));
 		ShapeUpgrade_UnifySameDomain unifyEdges(unifyFaces.Shape(), Standard_True, Standard_False, Standard_False);
 		unifyEdges.KeepShapes(keepVertices);
+		unifyEdges.SetSafeInputMode(false);
 		unifyEdges.Build();
 		//
 		TopoDS_Shape unified = unifyEdges.Shape();
