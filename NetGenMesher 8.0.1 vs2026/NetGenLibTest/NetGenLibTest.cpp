@@ -8,6 +8,8 @@
 #include <set>
 #include <vector>
 #include <chrono>
+#include <map>
+#include <algorithm>
 
 #include <climits>
 #include "TopTools_IndexedMapOfShape.hxx"
@@ -43,6 +45,8 @@
 #include "BRepBuilderAPI_Transform.hxx"
 #include "BRepBuilderAPI_GTransform.hxx"
 #include "TopoDS_Iterator.hxx"
+#include "TopTools_IndexedDataMapOfShapeListOfShape.hxx"
+#include "TopTools_ListOfShape.hxx"
 
 #include "windows.h"
 //#include "nglib.h"
@@ -344,11 +348,13 @@ void PrintUsage(const char* exePath)
 	cout << "      Deletes the faces and leaves the gap open. A solid that loses a" << endl;
 	cout << "      face comes back as the shells that are left of it. The face ids of" << endl;
 	cout << "      a group are numbered inside that solid, or in the shape when it is 0." << endl;
-	cout << "      Fails when the faces left would fall into more separate pieces." << endl;
+	cout << "      Pieces that no longer touch are written as <out>_000k.brep beside" << endl;
+	cout << "      the largest, and their number to <out>.pieces." << endl;
 	cout << "  BREP_REMOVE_COMPOUND_FACES         <in.brep> <out.brep> <numOfGroups> {...}" << endl;
 	cout << "      As BREP_REMOVE_FACES, for a compound of solids: <out.brep> keeps the" << endl;
 	cout << "      solids that lost nothing, every opened solid is written as the shell" << endl;
-	cout << "      <out>_000k.brep and <out>.opened lists the solid each came from." << endl;
+	cout << "      <out>_000k.brep, one file per piece, and <out>.opened lists the" << endl;
+	cout << "      solid each came from with its number of files." << endl;
 	cout << "      A solid that loses every face is gone and listed in <out>.removed." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
@@ -1676,11 +1682,93 @@ bool OffsetFaces(int argc, char* argv[])
 		return 1;
 	}
 }
+static int FindPieceGroup(vector<int> & groups, int i)
+{
+	while (groups[i] != i) i = groups[i] = groups[groups[i]];
+	return i;
+}
+// The pieces the faces of a shape fall into, two faces being in one piece when they share an edge. Each is a
+// shell of its faces with the orientations they had, and the largest by area comes first
+static vector<TopoDS_Shape> SplitIntoPieces(const TopoDS_Shape & shape)
+{
+	TopTools_IndexedMapOfShape faces;
+	TopExp::MapShapes(shape, TopAbs_FACE, faces);
+	TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+	TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+	//
+	vector<int> groups(faces.Extent() + 1);
+	for (int i = 0; i <= faces.Extent(); i++) groups[i] = i;
+	for (int i = 1; i <= edgeFaces.Extent(); i++)
+	{
+		int first = 0;
+		for (TopTools_ListIteratorOfListOfShape it(edgeFaces(i)); it.More(); it.Next())
+		{
+			int faceId = faces.FindIndex(it.Value());
+			if (faceId < 1) continue;
+			if (first == 0) { first = faceId; continue; }
+			int firstGroup = FindPieceGroup(groups, first);
+			int group = FindPieceGroup(groups, faceId);
+			if (firstGroup != group) groups[group] = firstGroup;
+		}
+	}
+	//
+	BRep_Builder builder;
+	map<int, int> pieceOfGroup;
+	vector<TopoDS_Shell> shells;
+	vector<bool> added(faces.Extent() + 1, false);
+	for (TopExp_Explorer exp0(shape, TopAbs_FACE); exp0.More(); exp0.Next())
+	{
+		int faceId = faces.FindIndex(exp0.Current());
+		if (faceId < 1 || added[faceId]) continue;
+		added[faceId] = true;
+		//
+		int group = FindPieceGroup(groups, faceId);
+		if (pieceOfGroup.find(group) == pieceOfGroup.end())
+		{
+			pieceOfGroup[group] = (int)shells.size();
+			TopoDS_Shell shell;
+			builder.MakeShell(shell);
+			shells.push_back(shell);
+		}
+		builder.Add(shells[pieceOfGroup[group]], exp0.Current());
+	}
+	//
+	vector<pair<double, int>> areas;
+	for (size_t i = 0; i < shells.size(); i++)
+	{
+		shells[i].Closed(BRep_Tool::IsClosed(shells[i]));
+		GProp_GProps properties;
+		BRepGProp::SurfaceProperties(shells[i], properties);
+		areas.push_back(make_pair(-properties.Mass(), (int)i));
+	}
+	sort(areas.begin(), areas.end());
+	vector<TopoDS_Shape> pieces;
+	for (size_t i = 0; i < areas.size(); i++) pieces.push_back(shells[areas[i].second]);
+	return pieces;
+}
+// The pieces of a body are written as the files numbered from fileNumber when the deletion divided it, and
+// the body as one file when it did not; answers the number of files written
+static int WriteBodyPieces(const TopoDS_Shape & body, int numOfPiecesBefore, const string & outputFileName,
+                           int fileNumber, bool firstIsOutput)
+{
+	vector<TopoDS_Shape> pieces = SplitIntoPieces(body);
+	if ((int)pieces.size() <= numOfPiecesBefore) pieces = vector<TopoDS_Shape>(1, body);
+	//
+	for (size_t i = 0; i < pieces.size(); i++)
+	{
+		string fileName = firstIsOutput && i == 0 ? outputFileName :
+		                  PatternCopyFileName(outputFileName, fileNumber + (int)i - (firstIsOutput ? 1 : 0));
+		if (!BRepTools::Write(pieces[i], fileName.c_str())) return -1;
+	}
+	return (int)pieces.size();
+}
 // The face ids arrive grouped as BREP_OFFSET_FACES takes them. A solid that loses a face comes back as
-// the shell that is left of it, and everything that loses nothing comes back as it was. For a compound
-// the output holds only the solids that were kept, each opened solid is written beside it as
-// <out>_000k.brep, <out>.opened names the solid each of those came from, one number per line, and
-// <out>.removed names the solids that lost every face and are gone
+// the shell that is left of it, and everything that loses nothing comes back as it was. A part that the
+// deletion divides into pieces that no longer touch comes back as the largest of them, the others written
+// beside it as <out>_000k.brep and their number in <out>.pieces. For a compound the output holds only the
+// solids that were kept, each opened solid is written beside it as <out>_000k.brep, in as many files as it
+// fell into pieces, <out>.opened names the solid each came from and its number of files, one solid per
+// line, and <out>.removed names the solids that lost every face and are gone
 bool RemoveFaces(int argc, char* argv[], bool compound)
 {
 	try
@@ -1774,7 +1862,25 @@ bool RemoveFaces(int argc, char* argv[], bool compound)
 		cout << "Ng_OCC_Save_BREP" << endl;
 		Ng_OCC_Save_BREP(occ_geom, argv[3]);
 		// The kept solids come first in the result and one shell for every opened solid follows them
-		if (compound)
+		if (!compound)
+		{
+			TopoDS_Shape result;
+			if (!BRepTools::Read(result, argv[3], builder))
+			{
+				cerr << "Error reading BREP file: " << argv[3] << endl;
+				return 1;
+			}
+			int numOfFiles = WriteBodyPieces(result, (int)SplitIntoPieces(inputShape).size(), argv[3], 1, true);
+			if (numOfFiles < 1)
+			{
+				cerr << "Error writing BREP file: " << argv[3] << endl;
+				return 1;
+			}
+			ofstream piecesFile(string(argv[3]) + ".pieces");
+			piecesFile << numOfFiles - 1 << endl;
+			piecesFile.close();
+		}
+		else
 		{
 			TopoDS_Shape result;
 			if (!BRepTools::Read(result, argv[3], builder))
@@ -1789,18 +1895,24 @@ bool RemoveFaces(int argc, char* argv[], bool compound)
 			builder.MakeCompound(keptSolids);
 			ofstream openedFile(string(argv[3]) + ".opened");
 			int child = 0;
+			int fileNumber = 1;
 			for (TopoDS_Iterator it(result); it.More(); it.Next(), child++)
 			{
 				if (child < numOfKeptSolids) builder.Add(keptSolids, it.Value());
 				else if (child < numOfKeptSolids + numOfOpenedSolids)
 				{
 					int opened = child - numOfKeptSolids;
-					if (!BRepTools::Write(it.Value(), PatternCopyFileName(argv[3], opened + 1).c_str()))
+					int solidNumber = openedSolids[opened];
+					int numOfPiecesBefore = solidNumber <= inputSolids.Extent() ?
+					                        (int)SplitIntoPieces(inputSolids(solidNumber)).size() : 1;
+					int numOfFiles = WriteBodyPieces(it.Value(), numOfPiecesBefore, argv[3], fileNumber, false);
+					if (numOfFiles < 1)
 					{
-						cerr << "Error writing the opened solid " << openedSolids[opened] << "." << endl;
+						cerr << "Error writing the opened solid " << solidNumber << "." << endl;
 						return 1;
 					}
-					openedFile << openedSolids[opened] << endl;
+					openedFile << solidNumber << " " << numOfFiles << endl;
+					fileNumber += numOfFiles;
 				}
 			}
 			openedFile.close();

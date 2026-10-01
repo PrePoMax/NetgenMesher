@@ -1818,38 +1818,6 @@ namespace nglib
 		}
 		return numOfKeptFaces;
 	}
-	static int FindFaceGroup(vector<int> & groups, int i)
-	{
-		while (groups[i] != i) i = groups[i] = groups[groups[i]];
-		return i;
-	}
-	// The pieces the faces of a shape fall into, two faces being in one piece when they share an edge
-	static int CountConnectedFaceGroups(const TopoDS_Shape & shape)
-	{
-		TopTools_IndexedMapOfShape faces;
-		TopExp::MapShapes(shape, TopAbs_FACE, faces);
-		TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
-		TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
-		//
-		vector<int> groups(faces.Extent() + 1);
-		for (int i = 0; i <= faces.Extent(); i++) groups[i] = i;
-		int numOfGroups = faces.Extent();
-		for (int i = 1; i <= edgeFaces.Extent(); i++)
-		{
-			const TopTools_ListOfShape & edgeFaceList = edgeFaces(i);
-			int first = 0;
-			for (TopTools_ListIteratorOfListOfShape it(edgeFaceList); it.More(); it.Next())
-			{
-				int faceId = faces.FindIndex(it.Value());
-				if (faceId < 1) continue;
-				if (first == 0) { first = faceId; continue; }
-				int firstGroup = FindFaceGroup(groups, first);
-				int group = FindFaceGroup(groups, faceId);
-				if (firstGroup != group) { groups[group] = firstGroup; numOfGroups--; }
-			}
-		}
-		return numOfGroups;
-	}
 	// The named faces are taken out and nothing is put in their place. A solid that loses a face is no
 	// longer closed, so what is left of it is written as one shell; a solid, a shell or a face that loses
 	// nothing is written as it was, so a neighbour keeps the very faces and edges it shared. The solids that
@@ -1858,6 +1826,7 @@ namespace nglib
 	// openedSolids receives their numbers, counted the way the explorer walks the solids, and may be NULL.
 	// A solid that loses every face is gone and leaves nothing in the result; removedSolids receives its
 	// number.
+	// What is left may no longer touch; the caller decides what the pieces become.
 	// The ids arrive grouped the way a face offset sends them: targetFaceCounts[i] of them are numbered
 	// inside solid targetSolids[i], and a solid of zero numbers them in the shape itself.
 	OCCGeometry * RemoveFaces(Ng_OCC_Geometry * geom, int * targetSolids, int * targetFaceCounts,
@@ -1893,7 +1862,6 @@ namespace nglib
 				numOfKeptFaces++;
 				continue;
 			}
-			// An opened solid is one body still, so it may not fall apart into pieces
 			TopoDS_Shell keptShell;
 			builder.MakeShell(keptShell);
 			int numOfSolidFaces = AddKeptFaces(exp0.Current(), removedFaces, builder, keptShell);
@@ -1901,12 +1869,6 @@ namespace nglib
 			{
 				removedSolidNumbers.push_back(solidNumber);
 				continue;
-			}
-			if (CountConnectedFaceGroups(keptShell) > CountConnectedFaceGroups(exp0.Current()))
-			{
-				cout << "Deleting the selected faces would divide the solid " << solidNumber
-				     << " into pieces that do not touch." << endl;
-				return NULL;
 			}
 			keptShell.Closed(BRep_Tool::IsClosed(keptShell));
 			openedShells.push_back(keptShell);
@@ -1942,14 +1904,6 @@ namespace nglib
 		if (numOfKeptFaces == 0 && removedSolidNumbers.size() == 0)
 		{
 			cout << "Deleting the selected faces would leave no face at all." << endl;
-			return NULL;
-		}
-		// The result replaces the part it was taken from, so it may not fall apart into more pieces than
-		// the part had; faces that no longer touch would be one part that is several bodies. The solids of
-		// a compound are bodies of their own, and each opened one was checked by itself above
-		if (solidNumber <= 1 && CountConnectedFaceGroups(result) > CountConnectedFaceGroups(occgeom->shape))
-		{
-			cout << "Deleting the selected faces would divide the part into pieces that do not touch." << endl;
 			return NULL;
 		}
 		if ((openedSolids != NULL && (int)openedSolidNumbers.size() > maxOpenedSolids) ||
