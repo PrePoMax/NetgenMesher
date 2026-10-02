@@ -1,6 +1,8 @@
 #include <mystdlib.h>
 
-#include "meshing.hpp"  
+#include "meshing.hpp"
+
+#include <mutex>
 
 namespace netgen
 {
@@ -384,6 +386,8 @@ namespace netgen
 
   Array<IntegrationPointData*> ipdtrig;
   Array<IntegrationPointData*> ipdquad;
+  static std::once_flag ipdtrig_once;
+  static std::once_flag ipdquad_once;
 
 
   int Element2d :: GetNIP () const
@@ -869,34 +873,36 @@ namespace netgen
 
 
 
-  void Element2d :: ComputeIntegrationPointData () const
+  static void FillIntegrationPointData (const Element2d & el,
+                                        Array<IntegrationPointData*> & ipd_table)
   {
-    switch (np)
-      {
-      case 3: if (ipdtrig.Size()) return; break;
-      case 4: if (ipdquad.Size()) return; break;
-      }
-
-    for (int i = 1; i <= GetNIP(); i++)
+    for (int i = 1; i <= el.GetNIP(); i++)
       {
         IntegrationPointData * ipd = new IntegrationPointData;
         Point2d hp;
-        GetIntegrationPoint (i, hp, ipd->weight);
+        el.GetIntegrationPoint (i, hp, ipd->weight);
         ipd->p(0) = hp.X();
         ipd->p(1) = hp.Y();
         ipd->p(2) = 0;
 
-        ipd->shape.SetSize(GetNP());
-        ipd->dshape.SetSize(2, GetNP());
+        ipd->shape.SetSize(el.GetNP());
+        ipd->dshape.SetSize(2, el.GetNP());
 
-        GetShape (hp, ipd->shape);
-        GetDShape (hp, ipd->dshape);
+        el.GetShape (hp, ipd->shape);
+        el.GetDShape (hp, ipd->dshape);
 
-        switch (np)
-          {
-          case 3: ipdtrig.Append (ipd); break;
-          case 4: ipdquad.Append (ipd); break;
-          }
+        ipd_table.Append (ipd);
+      }
+  }
+
+  void Element2d :: ComputeIntegrationPointData () const
+  {
+    // The tables are shared by every thread, so they are filled exactly once
+    // and are never written again after other threads can see them.
+    switch (np)
+      {
+      case 3: std::call_once (ipdtrig_once, [this] () { FillIntegrationPointData (*this, ipdtrig); }); break;
+      case 4: std::call_once (ipdquad_once, [this] () { FillIntegrationPointData (*this, ipdquad); }); break;
       }
   }
 
@@ -1647,6 +1653,8 @@ namespace netgen
 
   Array< AutoPtr < IntegrationPointData > > ipdtet;
   Array< AutoPtr < IntegrationPointData > > ipdtet10;
+  static std::once_flag ipdtet_once;
+  static std::once_flag ipdtet10_once;
 
 
 
@@ -2204,42 +2212,35 @@ namespace netgen
 
 
 
-  void Element :: ComputeIntegrationPointData () const
+  static void FillIntegrationPointData (const Element & el,
+                                        Array< AutoPtr < IntegrationPointData > > & ipd_table)
   {
-    switch (GetType())
-      {
-      case TET: if (ipdtet.Size()) return; break;
-      case TET10: if (ipdtet10.Size()) return; break;
-      default:
-        PrintSysError ("Element::ComputeIntegrationPoint, illegal type ", int(typ));
-      }
+    ipd_table.SetSize(el.GetNIP());
 
-    switch (GetType())
-      {
-      case TET: ipdtet.SetSize(GetNIP()); break;
-      case TET10: ipdtet10.SetSize(GetNIP()); break;
-      default:
-        PrintSysError ("Element::ComputeIntegrationPoint, illegal type2 ", int(typ));
-      }
-
-
-    for (int i = 1; i <= GetNIP(); i++)
+    for (int i = 1; i <= el.GetNIP(); i++)
       {
         IntegrationPointData * ipd = new IntegrationPointData;
-        GetIntegrationPoint (i, ipd->p, ipd->weight);
-        ipd->shape.SetSize(GetNP());
-        ipd->dshape.SetSize(3, GetNP());
+        el.GetIntegrationPoint (i, ipd->p, ipd->weight);
+        ipd->shape.SetSize(el.GetNP());
+        ipd->dshape.SetSize(3, el.GetNP());
 
-        GetShape (ipd->p, ipd->shape);
-        GetDShape (ipd->p, ipd->dshape);
+        el.GetShape (ipd->p, ipd->shape);
+        el.GetDShape (ipd->p, ipd->dshape);
 
-        switch (GetType())
-          {
-          case TET: ipdtet.Elem(i).Reset(ipd); break;
-          case TET10: ipdtet10.Elem(i).Reset(ipd); break;
-          default:
-            PrintSysError ("Element::ComputeIntegrationPoint(2), illegal type ", int(typ));
-          }
+        ipd_table.Elem(i).Reset(ipd);
+      }
+  }
+
+  void Element :: ComputeIntegrationPointData () const
+  {
+    // The tables are shared by every thread, so they are filled exactly once
+    // and are never written again after other threads can see them.
+    switch (GetType())
+      {
+      case TET: std::call_once (ipdtet_once, [this] () { FillIntegrationPointData (*this, ipdtet); }); break;
+      case TET10: std::call_once (ipdtet10_once, [this] () { FillIntegrationPointData (*this, ipdtet10); }); break;
+      default:
+        PrintSysError ("Element::ComputeIntegrationPoint, illegal type ", int(typ));
       }
   }
 
