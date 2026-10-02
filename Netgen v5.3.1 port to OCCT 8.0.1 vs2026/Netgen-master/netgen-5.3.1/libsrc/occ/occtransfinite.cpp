@@ -4,6 +4,8 @@
 #include <occgeom.hpp>
 #include <meshing.hpp>
 #include "occtransfinite.hpp"
+// A copy of PrePoMax CaeMesh/Meshing/Transfinite/Cpp/three_block_mapping.h, kept identical to it
+#include "three_block_mapping.h"
 
 #include <BRepAdaptor_Curve.hxx>
 
@@ -635,12 +637,33 @@ namespace netgen
 			std::vector<int> a, b;
 		};
 		std::vector<SidePair> pairs;
+		// A three-sided face is three blocks of quads around one inner node, which needs an even sum on its sides
+		// and no side with as many elements as the other two
+		struct SideTriple
+		{
+			int facenr;
+			std::vector<int> sides[3];
+		};
+		std::vector<SideTriple> triples;
 		for (std::map<int, std::vector<std::vector<int> > >::const_iterator it = given.sides.begin();
 			it != given.sides.end(); ++it)
 		{
-			if (it->second.size() != 4)
+			if (it->second.size() != 3 && it->second.size() != 4)
 				throw NgException("Transfinite: " + GivenFaceName(it->first) + " has " +
-					std::to_string(it->second.size()) + " sides; Netgen meshes structured faces of 4 sides.");
+					std::to_string(it->second.size()) + " sides; structured faces have 3 or 4.");
+			if (it->second.size() == 3)
+			{
+				SideTriple triple;
+				triple.facenr = it->first;
+				for (int q = 0; q < 3; q++)
+					for (int e : it->second[q])
+					{
+						if (!valid(e)) throw NgException("Transfinite: " + GivenFaceName(it->first) + " names an edge it does not have.");
+						triple.sides[q].push_back(e - 1);
+					}
+				triples.push_back(triple);
+				continue;
+			}
 			for (int q = 0; q < 2; q++)
 			{
 				SidePair pair;
@@ -718,7 +741,86 @@ namespace netgen
 		};
 		long long total = 0;
 		for (std::map<int, int>::const_iterator it = value.begin(); it != value.end(); ++it) total += it->second;
-		const long long max_iterations = 1000LL * std::max<size_t>(1, chains.size()) + 10LL * total;
+		const long long max_iterations = 1000LL * std::max<size_t>(1, chains.size() + triples.size()) + 10LL * total;
+		auto most_refined = [&](const std::vector<int> & roots)
+		{
+			int best = -1;
+			for (int root : roots)
+				if (best < 0 || value[root] / natural[root] > value[best] / natural[best] ||
+					(value[root] / natural[root] == value[best] / natural[best] && value[root] > value[best]))
+					best = root;
+			return best;
+		};
+		auto least_refined = [&](const std::vector<int> & roots)
+		{
+			int best = -1;
+			for (int root : roots)
+				if (best < 0 || value[root] / natural[root] < value[best] / natural[best] ||
+					(value[root] / natural[root] == value[best] / natural[best] && value[root] < value[best]))
+					best = root;
+			return best;
+		};
+		auto can_lower = [&](int root) { return !fixed_classes.count(root) && value[root] > floor_value[root]; };
+		// One step towards valid numbers on a three-sided face: a side with too many elements against the other two
+		// is lowered, or the others are raised, and an odd sum is lowered by one, or raised
+		auto balance_triple = [&](const SideTriple & triple)
+		{
+			int sums[3];
+			for (int k = 0; k < 3; k++) sums[k] = side_sum(triple.sides[k]);
+			if (three_block::countsValid(sums))
+				return false;
+			for (int k = 0; k < 3; k++)
+			{
+				if (sums[k] <= sums[(k + 1) % 3] + sums[(k + 2) % 3] - 2)
+					continue;
+				std::set<int> side_roots, other_roots;
+				for (int e : triple.sides[k]) side_roots.insert(find(e));
+				for (int e : triple.sides[(k + 1) % 3]) other_roots.insert(find(e));
+				for (int e : triple.sides[(k + 2) % 3]) other_roots.insert(find(e));
+				std::vector<int> lowerable, raisable;
+				for (int root : side_roots)
+					if (can_lower(root) && !other_roots.count(root)) lowerable.push_back(root);
+				if (!lowerable.empty())
+				{
+					value[most_refined(lowerable)]--;
+					return true;
+				}
+				for (int root : other_roots)
+					if (!fixed_classes.count(root) && !side_roots.count(root)) raisable.push_back(root);
+				if (!raisable.empty())
+				{
+					const int root = least_refined(raisable);
+					value[root]++;
+					floor_value[root] = value[root];
+					return true;
+				}
+				return false;
+			}
+			// An odd sum, changed by a class that occurs an odd number of times on the face
+			std::map<int, int> occurrences;
+			for (int k = 0; k < 3; k++)
+				for (int e : triple.sides[k]) occurrences[find(e)]++;
+			std::vector<int> lowerable, raisable;
+			for (std::map<int, int>::const_iterator it = occurrences.begin(); it != occurrences.end(); ++it)
+			{
+				if (it->second % 2 == 0) continue;
+				if (can_lower(it->first)) lowerable.push_back(it->first);
+				if (!fixed_classes.count(it->first)) raisable.push_back(it->first);
+			}
+			if (!lowerable.empty())
+			{
+				value[most_refined(lowerable)]--;
+				return true;
+			}
+			if (!raisable.empty())
+			{
+				const int root = least_refined(raisable);
+				value[root]++;
+				floor_value[root] = value[root];
+				return true;
+			}
+			return false;
+		};
 		bool changed = true;
 		for (long long iteration = 0; changed && iteration < max_iterations; iteration++)
 		{
@@ -768,6 +870,9 @@ namespace netgen
 					changed = true;
 				}
 			}
+			for (const SideTriple & triple : triples)
+				if (balance_triple(triple))
+					changed = true;
 		}
 
 		for (int i = 0; i < nedges; i++)
@@ -796,9 +901,116 @@ namespace netgen
 			message += "Transfinite: the opposite sides of " + GivenFaceName(pair.facenr) + " cannot be given the same "
 				"number of elements: " + describe(pair.a) + " against " + describe(pair.b) + ".\n";
 		}
+		for (const SideTriple & triple : triples)
+		{
+			int sums[3] = { 0, 0, 0 };
+			for (int k = 0; k < 3; k++)
+				for (int e : triple.sides[k]) sums[k] += counts[e];
+			if (three_block::countsValid(sums))
+				continue;
+			message += "Transfinite: the three sides of " + GivenFaceName(triple.facenr) + " cannot be given numbers "
+				"of elements three blocks of quads fill - an even sum, with no side carrying as many as the other two: " +
+				describe(triple.sides[0]) + "; " + describe(triple.sides[1]) + "; " + describe(triple.sides[2]) + ".\n";
+		}
 		if (!message.empty())
 			throw NgException(message + "Change the number of elements set on these edges, or switch off the "
-				"transfinite meshing of the 4-sided surfaces.");
+				"transfinite meshing of the 3-sided and 4-sided surfaces.");
+	}
+
+
+	// A three-sided face as three blocks of quads around one inner node, by the mapping all PrePoMax meshers share:
+	// the side nodes from corner to corner along the boundary loop, the inner nodes placed by the mapping and put on
+	// the surface. Without quads every quad is split into two triangles.
+	static void BuildThreeBlockFaceMesh(const OCCGeometry & geom, const Mesh & mesh, int facenr,
+		const std::vector<Segment> & loop, const std::vector<int> & corners, bool quads, OCCTransfiniteFaceMesh & result)
+	{
+		const int nseg = int(loop.size());
+		std::vector<three_block::Uv> side_uv[3];
+		std::vector<three_block::Xyz> side_xyz[3];
+		std::vector<int> side_pnums[3];
+		for (int k = 0; k < 3; k++)
+		{
+			const int first = corners[k];
+			const int count = (corners[(k + 1) % 3] - first + nseg) % nseg;
+			for (int c = 0; c <= count; c++)
+			{
+				const Segment & seg = loop[(first + std::min(c, count - 1)) % nseg];
+				const int end = c < count ? 0 : 1;
+				const int pnum = seg[end];
+				const Point<3> & p = mesh.Point(pnum);
+				side_pnums[k].push_back(pnum);
+				side_uv[k].push_back({ seg.epgeominfo[end].u, seg.epgeominfo[end].v });
+				side_xyz[k].push_back({ p(0), p(1), p(2) });
+			}
+		}
+		Handle(Geom_Surface) surface = BRep_Tool::Surface(TopoDS::Face(geom.fmap(facenr)));
+		three_block::Evaluator evaluate = [&](const std::vector<double> & uv, std::vector<double> & xyz)
+		{
+			xyz.resize(uv.size() / 2 * 3);
+			for (size_t i = 0; 2 * i + 1 < uv.size(); i++)
+			{
+				const gp_Pnt sp = surface->Value(uv[2 * i], uv[2 * i + 1]);
+				xyz[3 * i] = sp.X();
+				xyz[3 * i + 1] = sp.Y();
+				xyz[3 * i + 2] = sp.Z();
+			}
+		};
+		three_block::Grid grid;
+		try
+		{
+			grid = three_block::map(side_uv, side_xyz, evaluate);
+		}
+		catch (const std::exception & error)
+		{
+			throw NgException("Transfinite: " + GivenFaceName(facenr) + ": " + error.what());
+		}
+		if (grid.numberOfFoldedQuads > 0)
+			throw NgException("Transfinite: " + GivenFaceName(facenr) + " folds: " +
+				std::to_string(grid.numberOfFoldedQuads) + " of the quads of its three blocks turn over.");
+
+		const int nboundary = grid.numberOfBoundaryNodes();
+		std::vector<int> pnums(nboundary + grid.innerUv.size());
+		std::vector<three_block::Uv> uvs(pnums.size());
+		for (int k = 0; k < 3; k++)
+			for (int i = 0; i < grid.sideCounts[k]; i++)
+			{
+				const int id = grid.boundaryNodeId(k, i);
+				pnums[id] = side_pnums[k][i];
+				uvs[id] = side_uv[k][i];
+			}
+		for (size_t n = 0; n < grid.innerUv.size(); n++)
+		{
+			const three_block::Xyz & x = grid.innerXyz[n];
+			result.points.push_back(MeshPoint(Point<3>(x[0], x[1], x[2])));
+			pnums[nboundary + n] = -int(result.points.size());
+			uvs[nboundary + n] = grid.innerUv[n];
+		}
+		auto add = [&](const int * ids, int np)
+		{
+			Element2d element = np == 4 ? Element2d(pnums[ids[0]], pnums[ids[1]], pnums[ids[2]], pnums[ids[3]]) :
+				Element2d(pnums[ids[0]], pnums[ids[1]], pnums[ids[2]]);
+			element.SetIndex(facenr);
+			for (int v = 0; v < np; v++)
+			{
+				PointGeomInfo & gi = element.GeomInfoPi(v + 1);
+				gi.trignum = facenr;
+				gi.u = uvs[ids[v]][0];
+				gi.v = uvs[ids[v]][1];
+			}
+			result.elements.push_back(element);
+		};
+		for (const std::array<int, 4> & quad : grid.quads)
+		{
+			if (quads)
+				add(quad.data(), 4);
+			else
+			{
+				const int first[3] = { quad[0], quad[1], quad[2] };
+				const int second[3] = { quad[0], quad[2], quad[3] };
+				add(first, 3);
+				add(second, 3);
+			}
+		}
 	}
 
 
@@ -836,6 +1048,11 @@ namespace netgen
 			throw NgException("Transfinite: the boundary of " + GivenFaceName(facenr) + " does not pass its " +
 				std::to_string(sides.size()) + " sides one after another.");
 
+		if (sides.size() == 3)
+		{
+			BuildThreeBlockFaceMesh(geom, mesh, facenr, loop, corners, quads, result);
+			return;
+		}
 		std::string failure;
 		if (!BuildGridMesh(geom, mesh, facenr, loop, corners, true, false, quads, result, failure))
 			throw NgException("Transfinite: " + GivenFaceName(facenr) + " " + failure + ".");
