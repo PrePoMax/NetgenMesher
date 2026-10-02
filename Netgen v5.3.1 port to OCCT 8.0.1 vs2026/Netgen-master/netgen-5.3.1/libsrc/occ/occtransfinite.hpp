@@ -1,6 +1,8 @@
 #ifndef FILE_OCCTRANSFINITE
 #define FILE_OCCTRANSFINITE
 
+#include <map>
+#include <string>
 #include <vector>
 
 namespace netgen
@@ -47,6 +49,48 @@ namespace netgen
   */
   bool CollectTransfiniteSides(const OCCGeometry & geom, int facenr,
     double corner_angle, std::vector<int> sides[4]);
+
+  /**
+     The structured faces PrePoMax finds by the one definition all its meshers
+     follow, read from the transfinite file of the mesh parameters: the sides of
+     every face as chains of edge map numbers in loop order, the number of
+     segments the user set on an edge, and the names its messages use.  When
+     the file is given, Netgen detects no structured faces of its own.
+  */
+  struct OCCGivenTransfiniteFaces
+  {
+    bool loaded = false;
+    std::map<int, std::vector<std::vector<int> > > sides;
+    std::map<int, std::string> face_names;
+    std::map<int, std::string> edge_names;
+    std::map<int, int> pinned_counts;
+  };
+
+  OCCGivenTransfiniteFaces & GivenTransfiniteFaces();
+
+  void LoadGivenTransfiniteFaces(const std::string & filename);
+
+  /**
+     Gives the opposite sides of every given face the same number of segments,
+     for the coarser mesh.  Edges that are whole opposite sides carry one count,
+     the one the user set on one of them or the lowest the mesh size asks for;
+     sides that are chains of edges are balanced over these by lowering the
+     larger side at its most refined edge, and a side is raised only where the
+     other cannot be lowered.  Pinned counts are never changed.  counts and own
+     are indexed by edge map number - 1, own holding the counts the mesh size
+     asks for.  Throws when the sides cannot be balanced, naming the faces and
+     their edges.
+  */
+  void BalanceGivenTransfiniteEdgeCounts(const std::vector<int> & own, std::vector<int> & counts);
+
+  /**
+     Meshes a given face as a structured grid between the corners its sides
+     give - quads when quads is set, else every cell split in two triangles.
+     There is no fallback: the face is meshed as defined, and a grid that comes
+     out folded throws, naming the face.
+  */
+  void BuildGivenTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh, int facenr, bool quads,
+    OCCTransfiniteFaceMesh & result);
 }
 
 #endif

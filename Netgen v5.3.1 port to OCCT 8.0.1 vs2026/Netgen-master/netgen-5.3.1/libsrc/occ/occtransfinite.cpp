@@ -8,6 +8,12 @@
 #include <BRepAdaptor_Curve.hxx>
 
 #include <algorithm>
+#include <fstream>
+#include <map>
+#include <numeric>
+#include <set>
+#include <sstream>
+#include <string>
 #include <vector>
 
 
@@ -244,49 +250,16 @@ namespace netgen
 	}
 
 
-	bool BuildTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh,
-		int facenr, double corner_angle, bool check_size, OCCTransfiniteFaceMesh & result)
+	// The structured grid of a face between the corners found on its boundary loop: corners[q] is the loop
+	// segment side q starts with.  Strict leaves out the checks that hand a face back to the advancing front -
+	// the triangle angle and the size - and keeps only the fold, giving the reason in failure.  With quads every
+	// grid cell is one quad, else two triangles.
+	static bool BuildGridMesh(const OCCGeometry & geom, const Mesh & mesh, int facenr, const std::vector<Segment> & loop,
+		const std::vector<int> & corners, bool strict, bool check_size, bool quads, OCCTransfiniteFaceMesh & result,
+		std::string & failure)
 	{
-		result.points.clear();
-		result.elements.clear();
-
 		const TopoDS_Face face = TopoDS::Face(geom.fmap(facenr));
-
-		// A hole makes a second wire, and a degenerated edge (the tip of a cone)
-		// leaves a gap in the parameter space that the sides cannot bridge.
-		int wires = 0;
-		for (TopExp_Explorer exp(face, TopAbs_WIRE); exp.More(); exp.Next())
-			wires++;
-		if (wires != 1 || !HasOnlyBoundaryEdges(face))
-			return false;
-		for (TopExp_Explorer exp(face, TopAbs_EDGE); exp.More(); exp.Next())
-			if (BRep_Tool::Degenerated(TopoDS::Edge(exp.Current())))
-				return false;
-
-		std::vector<Segment> loop;
-		if (!ChainFaceBoundary(mesh, facenr, loop))
-			return false;
 		const int nseg = int(loop.size());
-
-		// Corners can only be at vertices: where the next segment belongs to
-		// another edge, or restarts a closed one.  Edges meeting at a flatter
-		// angle are joined into one side.
-		const double corner_turn = M_PI - corner_angle * M_PI / 180.;
-		std::vector<int> corners;
-		for (int k = 0; k < nseg; k++)
-		{
-			const Segment & in = loop[(k + nseg - 1) % nseg];
-			const Segment & out = loop[k];
-			if (in.epgeominfo[1].edgenr == out.epgeominfo[0].edgenr &&
-				in.epgeominfo[1].dist == out.epgeominfo[0].dist)
-				continue;
-
-			double cosine = SegmentTangent(geom, mesh, in, 1) * SegmentTangent(geom, mesh, out, 0);
-			if (acos(max(-1., min(1., cosine))) > corner_turn)
-				corners.push_back(k);
-		}
-		if (corners.size() != 4)
-			return false;
 
 		// The sides run along the loop from corner to corner.
 		TransfiniteSide sides[4];
@@ -310,7 +283,10 @@ namespace netgen
 		const int n = int(sides[0].pnums.size()) - 1;
 		const int m = int(sides[1].pnums.size()) - 1;
 		if (int(sides[2].pnums.size()) != n + 1 || int(sides[3].pnums.size()) != m + 1)
+		{
+			failure = "has opposite sides with different numbers of segments";
 			return false;
+		}
 
 		// Bottom and right follow the loop, top and left run against it, so all
 		// four go from low to high grid index.
@@ -325,7 +301,10 @@ namespace netgen
 
 		for (int q = 0; q < 4; q++)
 			if (!ComputeArcLength(mesh, sides[q]))
+			{
+				failure = "has a side of no length";
 				return false;
+			}
 
 		Box<2> uvbox(bottom.uv[0], bottom.uv[0]);
 		for (int q = 0; q < 4; q++)
@@ -333,13 +312,19 @@ namespace netgen
 				uvbox.Add(sides[q].uv[i]);
 		const double uvscale = max(uvbox.PMax()(0) - uvbox.PMin()(0), uvbox.PMax()(1) - uvbox.PMin()(1));
 		if (uvscale <= 0)
+		{
+			failure = "has no extent in its parameter space";
 			return false;
+		}
 
 		const Point<2> c0 = bottom.uv[0], c1 = bottom.uv[n], c2 = top.uv[n], c3 = top.uv[0];
 		const double corner_tolerance = 1e-3 * uvscale;
 		if (Dist(c0, left.uv[0]) > corner_tolerance || Dist(c1, right.uv[0]) > corner_tolerance ||
 			Dist(c2, right.uv[m]) > corner_tolerance || Dist(c3, left.uv[m]) > corner_tolerance)
+		{
+			failure = "does not close at its corners in its parameter space";
 			return false;
+		}
 
 		const int nx = n + 1;
 		const int ny = m + 1;
@@ -418,12 +403,15 @@ namespace netgen
 					if (orientation == 0)
 						orientation = area > 0 ? 1 : -1;
 					if (area * orientation <= min_uv_area ||
-						MinAngle(xyz[a], xyz[b], xyz[c]) < transfinite_min_angle)
+						(!strict && MinAngle(xyz[a], xyz[b], xyz[c]) < transfinite_min_angle))
 					{
 						result.points.clear();
 						result.elements.clear();
+						failure = "folds: its grid turns over in its parameter space";
 						return false;
 					}
+					if (quads)
+						continue;
 
 					Element2d element(pnums[a], pnums[b], pnums[c]);
 					element.SetIndex(facenr);
@@ -437,9 +425,23 @@ namespace netgen
 					}
 					result.elements.push_back(element);
 				}
+				if (!quads)
+					continue;
+				// The cell as one quad, turned as the triangles it was checked as
+				Element2d element(pnums[k00], pnums[k10], pnums[k11], pnums[k01]);
+				element.SetIndex(facenr);
+				const int nodes[4] = { k00, k10, k11, k01 };
+				for (int v = 0; v < 4; v++)
+				{
+					PointGeomInfo & gi = element.GeomInfoPi(v + 1);
+					gi.trignum = facenr;
+					gi.u = uv[nodes[v]](0);
+					gi.v = uv[nodes[v]](1);
+				}
+				result.elements.push_back(element);
 			}
 
-		if (check_size)
+		if (check_size && !strict)
 		{
 			// The advancing front coarsens from the boundary towards the mesh size
 			// inside the face, which a grid cannot: a finely divided stretch of a side
@@ -471,6 +473,372 @@ namespace netgen
 		}
 
 		return true;
+	}
+
+
+	bool BuildTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh,
+		int facenr, double corner_angle, bool check_size, OCCTransfiniteFaceMesh & result)
+	{
+		result.points.clear();
+		result.elements.clear();
+
+		const TopoDS_Face face = TopoDS::Face(geom.fmap(facenr));
+
+		// A hole makes a second wire, and a degenerated edge (the tip of a cone)
+		// leaves a gap in the parameter space that the sides cannot bridge.
+		int wires = 0;
+		for (TopExp_Explorer exp(face, TopAbs_WIRE); exp.More(); exp.Next())
+			wires++;
+		if (wires != 1 || !HasOnlyBoundaryEdges(face))
+			return false;
+		for (TopExp_Explorer exp(face, TopAbs_EDGE); exp.More(); exp.Next())
+			if (BRep_Tool::Degenerated(TopoDS::Edge(exp.Current())))
+				return false;
+
+		std::vector<Segment> loop;
+		if (!ChainFaceBoundary(mesh, facenr, loop))
+			return false;
+		const int nseg = int(loop.size());
+
+		// Corners can only be at vertices: where the next segment belongs to
+		// another edge, or restarts a closed one.  Edges meeting at a flatter
+		// angle are joined into one side.
+		const double corner_turn = M_PI - corner_angle * M_PI / 180.;
+		std::vector<int> corners;
+		for (int k = 0; k < nseg; k++)
+		{
+			const Segment & in = loop[(k + nseg - 1) % nseg];
+			const Segment & out = loop[k];
+			if (in.epgeominfo[1].edgenr == out.epgeominfo[0].edgenr &&
+				in.epgeominfo[1].dist == out.epgeominfo[0].dist)
+				continue;
+
+			double cosine = SegmentTangent(geom, mesh, in, 1) * SegmentTangent(geom, mesh, out, 0);
+			if (acos(max(-1., min(1., cosine))) > corner_turn)
+				corners.push_back(k);
+		}
+		if (corners.size() != 4)
+			return false;
+
+		std::string failure;
+		return BuildGridMesh(geom, mesh, facenr, loop, corners, false, check_size, false, result, failure);
+	}
+	OCCGivenTransfiniteFaces & GivenTransfiniteFaces()
+	{
+		static OCCGivenTransfiniteFaces given;
+		return given;
+	}
+
+
+	// The file PrePoMax writes:
+	//   faces <count>
+	//   face <face map number> <number of sides> <name>
+	//   side <number of edges> <edge map numbers in loop order>      once for every side
+	//   edges <count>
+	//   edge <edge map number> <segments the user set, 0 for none> <name>
+	void LoadGivenTransfiniteFaces(const std::string & filename)
+	{
+		OCCGivenTransfiniteFaces & given = GivenTransfiniteFaces();
+		given = OCCGivenTransfiniteFaces();
+		if (filename.empty())
+			return;
+
+		std::ifstream file(filename.c_str());
+		if (!file)
+			throw NgException("Transfinite: the file of the structured faces " + filename + " cannot be read.");
+
+		std::string line, word;
+		int count = 0;
+		auto rest = [](std::istringstream & stream)
+		{
+			std::string text;
+			std::getline(stream, text);
+			size_t first = text.find_first_not_of(' ');
+			return first == std::string::npos ? std::string() : text.substr(first);
+		};
+		while (std::getline(file, line))
+		{
+			std::istringstream stream(line);
+			if (!(stream >> word))
+				continue;
+			if (word == "faces")
+				stream >> count;
+			else if (word == "face")
+			{
+				int facenr = 0, numsides = 0;
+				stream >> facenr >> numsides;
+				given.face_names[facenr] = rest(stream);
+				std::vector<std::vector<int> > & sides = given.sides[facenr];
+				for (int q = 0; q < numsides && std::getline(file, line); q++)
+				{
+					std::istringstream sidestream(line);
+					int numedges = 0;
+					sidestream >> word >> numedges;
+					if (word != "side")
+						throw NgException("Transfinite: the sides of face " + std::to_string(facenr) +
+							" are not given in " + filename + ".");
+					std::vector<int> side(numedges);
+					for (int k = 0; k < numedges; k++)
+						sidestream >> side[k];
+					sides.push_back(side);
+				}
+			}
+			else if (word == "edges")
+				stream >> count;
+			else if (word == "edge")
+			{
+				int edgenr = 0, pinned = 0;
+				stream >> edgenr >> pinned;
+				given.edge_names[edgenr] = rest(stream);
+				if (pinned > 0)
+					given.pinned_counts[edgenr] = pinned;
+			}
+		}
+		given.loaded = true;
+		PrintMessage(3, "Transfinite: ", int(given.sides.size()), " structured faces given");
+	}
+
+
+	static std::string GivenFaceName(int facenr)
+	{
+		const OCCGivenTransfiniteFaces & given = GivenTransfiniteFaces();
+		std::map<int, std::string>::const_iterator it = given.face_names.find(facenr);
+		return it != given.face_names.end() && !it->second.empty() ? it->second : "face " + std::to_string(facenr);
+	}
+
+
+	static std::string GivenEdgeName(int edgenr)
+	{
+		const OCCGivenTransfiniteFaces & given = GivenTransfiniteFaces();
+		std::map<int, std::string>::const_iterator it = given.edge_names.find(edgenr);
+		return it != given.edge_names.end() && !it->second.empty() ? it->second : "edge " + std::to_string(edgenr);
+	}
+
+
+	void BalanceGivenTransfiniteEdgeCounts(const std::vector<int> & own, std::vector<int> & counts)
+	{
+		const OCCGivenTransfiniteFaces & given = GivenTransfiniteFaces();
+		const int nedges = int(counts.size());
+		auto valid = [&](int edgenr) { return edgenr >= 1 && edgenr <= nedges; };
+
+		std::set<int> pinned;
+		for (std::map<int, int>::const_iterator it = given.pinned_counts.begin(); it != given.pinned_counts.end(); ++it)
+			if (valid(it->first))
+			{
+				counts[it->first - 1] = std::max(1, it->second);
+				pinned.insert(it->first - 1);
+			}
+
+		struct SidePair
+		{
+			int facenr;
+			std::vector<int> a, b;
+		};
+		std::vector<SidePair> pairs;
+		for (std::map<int, std::vector<std::vector<int> > >::const_iterator it = given.sides.begin();
+			it != given.sides.end(); ++it)
+		{
+			if (it->second.size() != 4)
+				throw NgException("Transfinite: " + GivenFaceName(it->first) + " has " +
+					std::to_string(it->second.size()) + " sides; Netgen meshes structured faces of 4 sides.");
+			for (int q = 0; q < 2; q++)
+			{
+				SidePair pair;
+				pair.facenr = it->first;
+				for (int e : it->second[q])
+				{
+					if (!valid(e)) throw NgException("Transfinite: " + GivenFaceName(it->first) + " names an edge it does not have.");
+					pair.a.push_back(e - 1);
+				}
+				for (int e : it->second[q + 2])
+				{
+					if (!valid(e)) throw NgException("Transfinite: " + GivenFaceName(it->first) + " names an edge it does not have.");
+					pair.b.push_back(e - 1);
+				}
+				pairs.push_back(pair);
+			}
+		}
+
+		// Classes of the edges that are whole opposite sides
+		std::vector<int> parent(nedges);
+		std::iota(parent.begin(), parent.end(), 0);
+		auto find = [&](int i)
+		{
+			int root = i;
+			while (parent[root] != root) root = parent[root];
+			while (parent[i] != root) { int next = parent[i]; parent[i] = root; i = next; }
+			return root;
+		};
+		for (const SidePair & pair : pairs)
+			if (pair.a.size() == 1 && pair.b.size() == 1)
+				parent[find(pair.a[0])] = find(pair.b[0]);
+
+		std::map<int, int> value, floor_value;
+		std::map<int, double> natural;
+		std::map<int, int> natural_count;
+		std::set<int> fixed_classes, conflicting_classes;
+		std::map<int, std::set<int> > pinned_values;
+		for (int i = 0; i < nedges; i++)
+		{
+			const int root = find(i);
+			const int n = std::max(1, own[i]);
+			if (value.find(root) == value.end())
+			{
+				value[root] = n;
+				natural[root] = 0;
+				natural_count[root] = 0;
+				floor_value[root] = 1;
+			}
+			value[root] = std::min(value[root], n);
+			natural[root] += n;
+			natural_count[root]++;
+			if (pinned.count(i))
+				pinned_values[root].insert(counts[i]);
+		}
+		for (std::map<int, double>::iterator it = natural.begin(); it != natural.end(); ++it)
+			it->second /= natural_count[it->first];
+		for (std::map<int, std::set<int> >::const_iterator it = pinned_values.begin(); it != pinned_values.end(); ++it)
+		{
+			value[it->first] = *it->second.rbegin();
+			fixed_classes.insert(it->first);
+			if (it->second.size() > 1)
+				conflicting_classes.insert(it->first);
+		}
+
+		// The sides that are chains of edges, balanced over the classes
+		std::vector<const SidePair *> chains;
+		for (const SidePair & pair : pairs)
+			if (pair.a.size() > 1 || pair.b.size() > 1)
+				chains.push_back(&pair);
+		auto side_sum = [&](const std::vector<int> & side)
+		{
+			int sum = 0;
+			for (int e : side) sum += value[find(e)];
+			return sum;
+		};
+		long long total = 0;
+		for (std::map<int, int>::const_iterator it = value.begin(); it != value.end(); ++it) total += it->second;
+		const long long max_iterations = 1000LL * std::max<size_t>(1, chains.size()) + 10LL * total;
+		bool changed = true;
+		for (long long iteration = 0; changed && iteration < max_iterations; iteration++)
+		{
+			changed = false;
+			for (const SidePair * pair : chains)
+			{
+				const int sum_a = side_sum(pair->a), sum_b = side_sum(pair->b);
+				if (sum_a == sum_b)
+					continue;
+				const std::vector<int> & larger = sum_a > sum_b ? pair->a : pair->b;
+				const std::vector<int> & smaller = sum_a > sum_b ? pair->b : pair->a;
+				// A class on both sides changes them both, so only what it does to the difference counts
+				auto net = [&](int root)
+				{
+					int n = 0;
+					for (int e : larger) if (find(e) == root) n++;
+					for (int e : smaller) if (find(e) == root) n--;
+					return n;
+				};
+				int best = -1;
+				for (int e : larger)
+				{
+					const int root = find(e);
+					if (fixed_classes.count(root) || value[root] <= floor_value[root] || net(root) <= 0)
+						continue;
+					if (best < 0 || value[root] / natural[root] > value[best] / natural[best])
+						best = root;
+				}
+				if (best >= 0)
+				{
+					value[best]--;
+					changed = true;
+					continue;
+				}
+				for (int e : smaller)
+				{
+					const int root = find(e);
+					if (fixed_classes.count(root) || net(root) >= 0)
+						continue;
+					if (best < 0 || value[root] / natural[root] < value[best] / natural[best])
+						best = root;
+				}
+				if (best >= 0)
+				{
+					value[best]++;
+					floor_value[best] = value[best];
+					changed = true;
+				}
+			}
+		}
+
+		for (int i = 0; i < nedges; i++)
+			if (!pinned.count(i))
+				counts[i] = value[find(i)];
+
+		std::string message;
+		auto describe = [&](const std::vector<int> & side)
+		{
+			std::string text;
+			for (size_t k = 0; k < side.size(); k++)
+			{
+				if (k) text += ", ";
+				text += GivenEdgeName(side[k] + 1);
+				if (pinned.count(side[k])) text += " (set to " + std::to_string(counts[side[k]]) + ")";
+			}
+			return text;
+		};
+		for (const SidePair & pair : pairs)
+		{
+			int sum_a = 0, sum_b = 0;
+			for (int e : pair.a) sum_a += counts[e];
+			for (int e : pair.b) sum_b += counts[e];
+			if (sum_a == sum_b && !conflicting_classes.count(find(pair.a[0])))
+				continue;
+			message += "Transfinite: the opposite sides of " + GivenFaceName(pair.facenr) + " cannot be given the same "
+				"number of elements: " + describe(pair.a) + " against " + describe(pair.b) + ".\n";
+		}
+		if (!message.empty())
+			throw NgException(message + "Change the number of elements set on these edges, or switch off the "
+				"transfinite meshing of the 4-sided surfaces.");
+	}
+
+
+	void BuildGivenTransfiniteFaceMesh(const OCCGeometry & geom, const Mesh & mesh, int facenr, bool quads,
+		OCCTransfiniteFaceMesh & result)
+	{
+		result.points.clear();
+		result.elements.clear();
+		const OCCGivenTransfiniteFaces & given = GivenTransfiniteFaces();
+		const std::vector<std::vector<int> > & sides = given.sides.at(facenr);
+
+		std::map<int, int> edge_side;
+		for (size_t q = 0; q < sides.size(); q++)
+			for (int e : sides[q])
+				edge_side[e] = int(q);
+
+		std::vector<Segment> loop;
+		if (!ChainFaceBoundary(mesh, facenr, loop))
+			throw NgException("Transfinite: the boundary of " + GivenFaceName(facenr) + " is not one loop of segments.");
+
+		// A corner is where the loop passes from one side to the next
+		const int nseg = int(loop.size());
+		std::vector<int> corners;
+		for (int k = 0; k < nseg; k++)
+		{
+			std::map<int, int>::const_iterator in = edge_side.find(loop[(k + nseg - 1) % nseg].epgeominfo[1].edgenr);
+			std::map<int, int>::const_iterator out = edge_side.find(loop[k].epgeominfo[0].edgenr);
+			if (in == edge_side.end() || out == edge_side.end())
+				throw NgException("Transfinite: the boundary of " + GivenFaceName(facenr) +
+					" runs along an edge none of its sides has.");
+			if (in->second != out->second)
+				corners.push_back(k);
+		}
+		if (corners.size() != sides.size())
+			throw NgException("Transfinite: the boundary of " + GivenFaceName(facenr) + " does not pass its " +
+				std::to_string(sides.size()) + " sides one after another.");
+
+		std::string failure;
+		if (!BuildGridMesh(geom, mesh, facenr, loop, corners, true, false, quads, result, failure))
+			throw NgException("Transfinite: " + GivenFaceName(facenr) + " " + failure + ".");
 	}
 }
 

@@ -2761,6 +2761,12 @@ Ng_Meshing_Parameters ReadParameters(const char *fileName, double &deflection)
 		// corner where its edges meet at less than this angle.
 		if (getline(File, line) && getline(File, line) && !line.empty())
 			mp.transfinite_angle = std::stod(line);
+		// Optional file of the structured faces PrePoMax gives, which replace those Netgen finds
+		if (getline(File, line) && getline(File, line) && !line.empty())
+		{
+			mp.transfinite_filename = new char[line.length() + 1];
+			strcpy(mp.transfinite_filename, line.c_str());
+		}
 		//
 		File.close();
 	}

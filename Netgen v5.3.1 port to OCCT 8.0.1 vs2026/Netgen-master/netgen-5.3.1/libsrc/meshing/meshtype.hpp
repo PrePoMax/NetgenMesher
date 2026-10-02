@@ -1069,6 +1069,8 @@ namespace netgen
     int transfinite_faces;
     /// a vertex is a corner of a transfinite face where its edges meet at less than this angle (degrees)
     double transfinite_angle;
+    /// the file of the structured faces PrePoMax gives, which replace those Netgen finds; empty for none
+    std::string transfinite_filename;
     /// weight of element size w.r.t element shape
     double elsizeweight;
     /// init with default values

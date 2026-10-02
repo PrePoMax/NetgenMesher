@@ -663,7 +663,30 @@ namespace netgen
 				DivideEdge(edge, result.points, result.parameters, mesh, result.status);
 			});
 
-		if (mparam.transfinite_faces)
+		// The structured faces PrePoMax gives replace those Netgen would find
+		LoadGivenTransfiniteFaces(mparam.transfinite_filename);
+		if (GivenTransfiniteFaces().loaded)
+		{
+			std::vector<int> own(nedges), counts(nedges);
+			for (int i = 0; i < nedges; i++)
+				own[i] = edge_results[i].skip ? 1 : int(edge_results[i].points.Size()) + 1;
+			counts = own;
+			BalanceGivenTransfiniteEdgeCounts(own, counts);
+
+			std::vector<int> redivide;
+			for (int i = 0; i < nedges; i++)
+				if (!edge_results[i].skip && counts[i] != own[i])
+					redivide.push_back(i);
+			parallel.ParallelFor(int(redivide.size()),
+				[&](int, int k)
+				{
+					const int i = redivide[k];
+					DivideEdge(unique_edges[i], edge_results[i].points, edge_results[i].parameters, mesh,
+						edge_results[i].status, counts[i]);
+				});
+			PrintMessage(3, "Transfinite: ", int(redivide.size()), " edges redivided");
+		}
+		else if (mparam.transfinite_faces)
 			MatchTransfiniteEdgeCounts(geom, mesh, unique_edges, edge_results, parallel);
 
 		for (int i = 0; i < nedges; i++)
@@ -972,7 +995,17 @@ namespace netgen
 
 			FaceDescriptor & fd = mesh.GetFaceDescriptor(k);
 
-			if (mparam.transfinite_faces)
+			if (GivenTransfiniteFaces().loaded && GivenTransfiniteFaces().sides.count(k))
+			{
+				OCCTransfiniteFaceMesh face_mesh;
+				BuildGivenTransfiniteFaceMesh(geom, mesh, k, mparam.quad != 0, face_mesh);
+				PrintMessage(2, "Face ", k, " / ", mesh.GetNFD(), " (transfinite)");
+				AddTransfiniteFaceMesh(mesh, face_mesh);
+				geom.facemeshstatus[k - 1] = 1;
+				transfinite_face[k] = 1;
+				continue;
+			}
+			if (!GivenTransfiniteFaces().loaded && mparam.transfinite_faces)
 			{
 				OCCTransfiniteFaceMesh face_mesh;
 				if (BuildTransfiniteFaceMesh(geom, mesh, k, mparam.transfinite_angle,
@@ -1520,7 +1553,17 @@ namespace netgen
 		const Box<3> & geometry_box, int facenr, int perfstepsend,
 		double starttime, OCCFaceMeshResult & result)
 	{
-		if (mparam.transfinite_faces)
+		if (GivenTransfiniteFaces().loaded && GivenTransfiniteFaces().sides.count(facenr))
+		{
+			OCCTransfiniteFaceMesh face_mesh;
+			BuildGivenTransfiniteFaceMesh(geom, source, facenr, mparam.quad != 0, face_mesh);
+			result.points.swap(face_mesh.points);
+			result.elements.swap(face_mesh.elements);
+			result.transfinite = true;
+			result.success = true;
+			return;
+		}
+		if (!GivenTransfiniteFaces().loaded && mparam.transfinite_faces)
 		{
 			OCCTransfiniteFaceMesh face_mesh;
 			if (BuildTransfiniteFaceMesh(geom, source, facenr, mparam.transfinite_angle,

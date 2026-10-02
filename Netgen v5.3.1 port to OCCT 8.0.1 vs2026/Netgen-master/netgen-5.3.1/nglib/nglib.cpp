@@ -3062,6 +3062,7 @@ namespace nglib
 		parallel_meshing_threads = 1;
 		transfinite_faces = 0;
 		transfinite_angle = 135;
+		transfinite_filename = 0;
 	}
 
 
@@ -3106,6 +3107,7 @@ namespace nglib
 		parallel_meshing_threads = 1;
 		transfinite_faces = 0;
 		transfinite_angle = 135;
+		transfinite_filename = 0;
 	}
 
 
@@ -3139,6 +3141,7 @@ namespace nglib
 		mparam.parallel_meshing_threads = parallel_meshing_threads > 0 ? parallel_meshing_threads : 1;
 		mparam.transfinite_faces = transfinite_faces;
 		mparam.transfinite_angle = transfinite_angle;
+		mparam.transfinite_filename = transfinite_filename ? transfinite_filename : "";
 	}
 	// ------------------ End - Meshing Parameters related functions --------------------
 

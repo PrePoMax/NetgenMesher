@@ -2540,6 +2540,7 @@ namespace netgen
     parallel_meshing_threads = 1;
     transfinite_faces = 0;
     transfinite_angle = 135;
+    transfinite_filename = "";
 
     elsizeweight = 0.2;
     giveuptol2d = 200;
@@ -2583,6 +2584,7 @@ namespace netgen
         << " parallel_meshing_threads = " << parallel_meshing_threads << endl
         << " transfinite_faces = " << transfinite_faces << endl
         << " transfinite_angle = " << transfinite_angle << endl
+        << " transfinite_filename = " << transfinite_filename << endl
         << " elsizeweight = " <<  elsizeweight << endl
         << " giveuptol2d = " <<  giveuptol2d << endl
         << " giveuptol = " <<  giveuptol << endl
@@ -2627,6 +2629,7 @@ namespace netgen
     parallel_meshing_threads = other.parallel_meshing_threads;
     transfinite_faces = other.transfinite_faces;
     transfinite_angle = other.transfinite_angle;
+    transfinite_filename = other.transfinite_filename;
     elsizeweight = other.elsizeweight;
     giveuptol2d = other.giveuptol2d;
     giveuptol = other.giveuptol;
