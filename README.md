@@ -55,6 +55,14 @@ through three blind holes and merged back has the faces, edges and vertices it h
 that do not all share faces cannot become one solid and are refused, as is a result that is not a valid
 solid; the command fails when the result has as many faces as before. PrePoMax runs it for Fuse Cells.
 
+`BREP_DEFEATURE_COMPOUND <in.brep> <out.brep> <numOfGroups> {<solid> <numOfFaces> <faceId> ...}` defeatures a
+compound of solids as a whole, the faces grouped and numbered inside their solid as `BREP_REMOVE_FACES` takes
+them. `BREP_DEFEATURE` takes one solid, and defeaturing the solids of a compound one at a time changes a face two
+of them share on one side only, so they no longer meet. Every solid is followed into the result through the
+history of the defeaturing and written back in the order it was read, which is the order PrePoMax numbers the
+sub parts of the compound in; a solid the defeaturing removed or split is refused. PrePoMax runs it for
+Defeature on the sub parts and split cells of a compound.
+
 `BREP_REMOVE_FACES <in.brep> <out.brep> <numOfGroups> {<solid> <numOfFaces> <faceId> ...}` deletes the named
 faces and puts nothing in their place. The ids are grouped as `BREP_OFFSET_FACES` takes them: the ids of a group
 are numbered inside that solid, in explorer order, or in the face map of the whole shape when the solid is 0. A

@@ -82,6 +82,7 @@ bool SplitGeometry(int argc, char* argv[], bool preview);
 bool RemoveSolids(int argc, char* argv[]);
 bool MergeSolids(int argc, char* argv[]);
 bool DefeatureBrep(int argc, char* argv[]);
+bool DefeatureCompoundBrep(int argc, char* argv[]);
 bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool OffsetFaces(int argc, char* argv[]);
@@ -180,6 +181,7 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_REMOVE_SOLIDS") == 0) return RemoveSolids(argc, argv);
 	else if (strcmp(argv[1], "BREP_MERGE_SOLIDS") == 0) return MergeSolids(argc, argv);
 	else if (strcmp(argv[1], "BREP_DEFEATURE") == 0) return DefeatureBrep(argc, argv);
+	else if (strcmp(argv[1], "BREP_DEFEATURE_COMPOUND") == 0) return DefeatureCompoundBrep(argc, argv);
 	else if (strcmp(argv[1], "BREP_SPLIT_CLOSED_FACES") == 0) return SplitClosedFaces(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SOLID_TO_SHELL") == 0) return ConvertToShell(argc, argv);
 	else if (strcmp(argv[1], "BREP_CONVERT_SHELL_TO_SOLID") == 0) return ConvertToSolid(argc, argv);
@@ -343,6 +345,12 @@ void PrintUsage(const char* exePath)
 	cout << "      which divides nothing." << endl;
 	cout << "  BREP_DEFEATURE                     <in.brep> <out.brep> <faceId> [faceId ...]" << endl;
 	cout << "      Removes selected faces from one CAD solid and closes the gap." << endl;
+	cout << "  BREP_DEFEATURE_COMPOUND            <in.brep> <out.brep> <numOfGroups>" << endl;
+	cout << "                                     {<solid> <numOfFaces> <faceId> ...}" << endl;
+	cout << "      As BREP_DEFEATURE, for a compound of solids defeatured as a whole, so" << endl;
+	cout << "      that a face two solids share changes on both of them. The face ids of" << endl;
+	cout << "      a group are numbered inside that solid. <out.brep> holds the solids in" << endl;
+	cout << "      the order of <in.brep>." << endl;
 	cout << "  BREP_REMOVE_FACES                  <in.brep> <out.brep> <numOfGroups>" << endl;
 	cout << "                                     {<solid> <numOfFaces> <faceId> ...}" << endl;
 	cout << "      Deletes the faces and leaves the gap open. A solid that loses a" << endl;
@@ -1769,6 +1777,163 @@ static int WriteBodyPieces(const TopoDS_Shape & body, int numOfPiecesBefore, con
 // solids that were kept, each opened solid is written beside it as <out>_000k.brep, in as many files as it
 // fell into pieces, <out>.opened names the solid each came from and its number of files, one solid per
 // line, and <out>.removed names the solids that lost every face and are gone
+// The compound is defeatured as a whole rather than solid by solid, so that a feature on a face two solids share,
+// or one running across them, is removed from both and the solids still meet on the faces they share. The solids
+// are written back in the order they were read, which is the order the sub parts of the compound are numbered in.
+bool DefeatureCompoundBrep(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 7)
+		{
+			cerr << "BREP_DEFEATURE_COMPOUND takes an input file, an output file and the number of face groups, each"
+			     << " written as a solid number, a face count and that many face ids." << endl;
+			return 1;
+		}
+		BRep_Builder builder;
+		TopoDS_Shape inputShape;
+		if (!BRepTools::Read(inputShape, argv[2], builder))
+		{
+			cerr << "Error reading BREP file: " << argv[2] << endl;
+			return 1;
+		}
+		std::vector<TopoDS_Shape> solids;
+		for (TopExp_Explorer exp0(inputShape, TopAbs_SOLID); exp0.More(); exp0.Next()) solids.push_back(exp0.Current());
+		if (solids.size() < 1)
+		{
+			cerr << "Defeaturing a compound needs a BREP containing solids." << endl;
+			return 1;
+		}
+		TopTools_IndexedMapOfShape faces;
+		TopExp::MapShapes(inputShape, TopAbs_FACE, faces);
+		//
+		std::string::size_type sz;
+		int numOfGroups = std::stoi(argv[4], &sz);
+		TopTools_IndexedMapOfShape selectedFaces;
+		int argument = 5;
+		for (int group = 0; group < numOfGroups; group++)
+		{
+			if (argument + 1 >= argc)
+			{
+				cerr << "BREP_DEFEATURE_COMPOUND was given fewer face groups than it was told to expect." << endl;
+				return 1;
+			}
+			int solidNumber = std::stoi(argv[argument++], &sz);
+			int numOfFaces = std::stoi(argv[argument++], &sz);
+			if (solidNumber < 1 || solidNumber > (int)solids.size())
+			{
+				cerr << "Solid " << solidNumber << " is outside 1 to " << solids.size() << "." << endl;
+				return 1;
+			}
+			TopTools_IndexedMapOfShape solidFaces;
+			TopExp::MapShapes(solids[solidNumber - 1], TopAbs_FACE, solidFaces);
+			for (int i = 0; i < numOfFaces; i++)
+			{
+				if (argument >= argc)
+				{
+					cerr << "BREP_DEFEATURE_COMPOUND was given fewer face ids than it was told to expect." << endl;
+					return 1;
+				}
+				int faceId = std::stoi(argv[argument++], &sz);
+				if (faceId < 1 || faceId > solidFaces.Extent())
+				{
+					cerr << "Face id " << faceId << " of solid " << solidNumber << " is outside 1 to "
+					     << solidFaces.Extent() << "." << endl;
+					return 1;
+				}
+				selectedFaces.Add(solidFaces(faceId));
+			}
+		}
+		if (selectedFaces.Extent() == 0)
+		{
+			cerr << "No face ids were given." << endl;
+			return 1;
+		}
+		BRepAlgoAPI_Defeaturing defeaturing;
+		defeaturing.SetShape(inputShape);
+		defeaturing.SetRunParallel(false);
+		defeaturing.SetToFillHistory(true);
+		for (int i = 1; i <= selectedFaces.Extent(); i++) defeaturing.AddFaceToRemove(selectedFaces(i));
+		defeaturing.Build();
+		if (!defeaturing.IsDone())
+		{
+			defeaturing.DumpErrors(cerr);
+			cerr << "The selected faces could not be defeatured." << endl;
+			return 1;
+		}
+		if (defeaturing.HasWarnings()) defeaturing.DumpWarnings(cout);
+		TopoDS_Shape result = defeaturing.Shape();
+		if (result.IsNull())
+		{
+			cerr << "Defeaturing returned no shape." << endl;
+			return 1;
+		}
+		// Every solid is followed into the result through the history, so the order of the solids is kept
+		TopTools_IndexedMapOfShape resultSolids;
+		TopExp::MapShapes(result, TopAbs_SOLID, resultSolids);
+		TopoDS_Compound ordered;
+		builder.MakeCompound(ordered);
+		TopTools_IndexedMapOfShape usedSolids;
+		for (size_t i = 0; i < solids.size(); i++)
+		{
+			TopoDS_Shape solid = solids[i];
+			if (defeaturing.IsDeleted(solid))
+			{
+				cerr << "Defeaturing removed the solid " << i + 1 << "." << endl;
+				return 1;
+			}
+			const TopTools_ListOfShape & modified = defeaturing.Modified(solid);
+			if (modified.Extent() > 1)
+			{
+				cerr << "Defeaturing split the solid " << i + 1 << "." << endl;
+				return 1;
+			}
+			if (modified.Extent() == 1) solid = modified.First();
+			if (!resultSolids.Contains(solid) || usedSolids.Contains(solid))
+			{
+				cerr << "The solid " << i + 1 << " could not be found in the defeatured compound." << endl;
+				return 1;
+			}
+			usedSolids.Add(solid);
+			builder.Add(ordered, solid);
+		}
+		if (usedSolids.Extent() != resultSolids.Extent())
+		{
+			cerr << "Defeaturing returned a different number of solids." << endl;
+			return 1;
+		}
+		if (!BRepCheck_Analyzer(ordered).IsValid())
+		{
+			cerr << "Defeaturing did not return a valid compound of solids." << endl;
+			return 1;
+		}
+		TopTools_IndexedMapOfShape resultFaces;
+		TopExp::MapShapes(ordered, TopAbs_FACE, resultFaces);
+		if (resultFaces.Extent() >= faces.Extent())
+		{
+			cerr << "No face was removed from the geometry." << endl;
+			return 1;
+		}
+		if (!BRepTools::Write(ordered, argv[3]))
+		{
+			cerr << "Error writing BREP file: " << argv[3] << endl;
+			return 1;
+		}
+		cout << "Defeature finished successfully: " << faces.Extent() - resultFaces.Extent()
+		     << " faces were removed." << endl;
+		return 0;
+	}
+	catch (const Standard_Failure & error)
+	{
+		cerr << "Defeaturing failed: " << error.GetMessageString() << endl;
+		return 1;
+	}
+	catch (const std::exception & error)
+	{
+		cerr << "Defeaturing failed: " << error.what() << endl;
+		return 1;
+	}
+}
 bool RemoveFaces(int argc, char* argv[], bool compound)
 {
 	try
