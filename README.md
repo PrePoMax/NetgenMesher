@@ -146,6 +146,15 @@ PrePoMax's `mixed_03_1` kept 3 of its 233 quadrilaterals open and stopped. Witho
 quadrilateral is scaled by its own size now (`meshing3.cpp`); every quadrilateral of `mixed_03_1` carries a
 pyramid, at a minimum SICN of 0.383, and its tetrahedra reach 0.275.
 
+Two pyramids of the usual height on the two quadrilaterals of a sharp inside corner leave no room for one
+another. On PrePoMax's `mixed_04` two faces meet at 60 degrees; the first pyramid's side face rose 49 degrees
+from its base and 4 of 33 quadrilaterals stayed open. Over every edge where another quadrilateral of the front
+closes an angle sharper than a right one with the base, a pyramid is now lowered until its side face rises no
+more than a third of that angle (`meshing3.cpp`), which leaves the middle third to the tetrahedra. `mixed_04`
+meshes at a minimum SICN of 0.330 for the tetrahedra and 0.592 for the pyramids. Lowering the pyramid in every
+inside corner, and against triangles as well, also meshed it but cost `mixed_03` 0.255 to 0.218 in its
+tetrahedra; limited to sharp corners between quadrilaterals the other fills come out as before.
+
 `BREP_VISUALIZATION` writes the version 2 `.vis` format. It defines solids, shells, faces, edges, and vertices with their
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).

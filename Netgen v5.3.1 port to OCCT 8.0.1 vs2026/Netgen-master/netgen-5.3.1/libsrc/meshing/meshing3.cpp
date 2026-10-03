@@ -305,6 +305,61 @@ GenerateMesh (Mesh & mesh, const MeshingParameters & mp)
 			      locfacesplit);
       NgProfiler::StopTimer (meshing3_timer_a);
 
+      // Two pyramids of the usual height standing on the two quadrilaterals of a sharp inside corner leave no room
+      // for one another, and the second one never fits. Over every edge where another quadrilateral of the front
+      // closes an angle sharper than a right one with the base, the pyramid is lowered until its side face rises
+      // no more than a third of that angle, which leaves the other third to the tetrahedra between the two. The
+      // rules put the apex half the scale above the base
+      if (locfaces[0].GetNP() == 4 && !adfront->HasConnectedPairs())
+	{
+	  const MiniElement2d & base = locfaces[0];
+	  Point3d bp[4];
+	  for (int k = 0; k < 4; k++)
+	    bp[k] = locpoints.Get (base.PNum(k+1));
+	  Point3d bc = Center (Center (bp[0], bp[1]), Center (bp[2], bp[3]));
+	  Vec3d inner = Cross (bp[1] - bp[0], bp[3] - bp[0]);
+	  inner /= -inner.Length();
+	  for (int k = 0; k < 4; k++)
+	    {
+	      int ka = base.PNum(k+1);
+	      int kb = base.PNum((k+1)%4+1);
+	      Vec3d edge = bp[(k+1)%4] - bp[k];
+	      edge /= edge.Length();
+	      Point3d em = Center (bp[k], bp[(k+1)%4]);
+	      Vec3d u = bc - em;
+	      u -= (u * edge) * edge;
+	      double d = u.Length();
+	      if (d < 1e-12) continue;
+	      u /= d;
+	      for (int f = 2; f <= locfaces.Size(); f++)
+		{
+		  const MiniElement2d & face = locfaces.Get(f);
+		  if (face.GetNP() != 4) continue;
+		  int shared = 0;
+		  int others = 0;
+		  Vec3d w(0, 0, 0);
+		  for (int m = 1; m <= face.GetNP(); m++)
+		    {
+		      int pm = face.PNum(m);
+		      if (pm == ka || pm == kb) shared++;
+		      else
+			{
+			  w += locpoints.Get(pm) - em;
+			  others++;
+			}
+		    }
+		  if (shared != 2 || others == 0) continue;
+		  w /= others;
+		  w -= (w * edge) * edge;
+		  if (w.Length() < 1e-12 || w * inner <= 1e-12 * w.Length()) continue;
+		  w /= w.Length();
+		  double angle = acos (max2 (-1.0, min2 (1.0, u * w)));
+		  if (angle >= 0.5 * M_PI) continue;
+		  hshould = min2 (hshould, 2 * d * tan (angle / 3));
+		}
+	    }
+	}
+
       // (*testout) << "locfaces = " << endl << locfaces << endl;
 
       int pi1 = pindex.Get(locfaces[0].PNum(1));
