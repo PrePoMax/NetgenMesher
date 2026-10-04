@@ -1387,12 +1387,14 @@ namespace nglib
 	};
 	void ExportVisualizationVertices(OCCGeometry* occgeom, ofstream& outfile)
 	{
+		// The coordinates are written in full: a point picked on the visualization is handed back to the
+		// modelling kernel, and six decimals put a vertex a fraction of a micron off the geometry it lies on
+		outfile.precision(17);
 		outfile << "Number of visualization vertices: " << occgeom->vmap.Extent() << " (Id, X, Y, Z)" << endl;
 		for (int i = 1; i <= occgeom->vmap.Extent(); i++)
 		{
 			gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(occgeom->vmap(i)));
-			outfile << i << " " << to_string(point.X()) << " " << to_string(point.Y()) << " "
-				    << to_string(point.Z()) << "\n";
+			outfile << i << " " << point.X() << " " << point.Y() << " " << point.Z() << "\n";
 		}
 		outfile << endl;
 	}
@@ -1444,7 +1446,7 @@ namespace nglib
 					//
 					for (Standard_Integer i = 1; i <= aPoints.Length(); i++)
 					{
-						outfile << i << " " << to_string(aPoints(i).X()) << " " << to_string(aPoints(i).Y()) << " " << to_string(aPoints(i).Z()) << "\n";
+						outfile << i << " " << aPoints(i).X() << " " << aPoints(i).Y() << " " << aPoints(i).Z() << "\n";
 					}
 					// Triangles
 					const Poly_Array1OfTriangle& triangles = aTr->Triangles();

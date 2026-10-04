@@ -88,6 +88,10 @@ An entity starts with `<Kind> number: <id>`. Its following lines use `<Kind> <pr
 the visual group but have no semantic meaning. A reader continues the entity until another entity header or section
 header appears.
 
+Every coordinate is written with 17 significant digits, the visualization nodes as well as the metadata. A point
+picked on the visualization goes back to the modelling kernel, and a vertex rounded to six decimals lies a fraction of
+a micron off the edges it is on - enough for a splitting plane through it to miss them and the split to lose pieces.
+
 The entity kinds are `Solid`, `Shell`, `Face`, `Edge`, and `Vertex`. IDs are 1-based OpenCASCADE map IDs. Unknown
 properties are ignored. A missing property means unavailable, so a property can be added or removed without changing
 the grammar. The format version changes when the grammar or meaning of an existing property changes incompatibly.
