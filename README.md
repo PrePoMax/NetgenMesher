@@ -38,7 +38,9 @@ the file to keep what it knew about a solid - its sub part, its color - on the p
 splits the same way and writes only the edges the split made, each as `Edge: <n>` followed by n lines of
 `x y z` sampled on it, and saves no result. An edge of the result is left out when it is an edge of the input,
 or when points sampled inside it lie on the input edges - a piece of an edge the tool crossed is the same
-curve cut shorter - so what remains is the outline of the cut. PrePoMax draws it as the preview of a split. Run the
+curve cut shorter - so what remains is the outline of the cut. A solid split also writes every edge of
+a face it made, a face that lies on no face of the input, since a tool running along edges the shape already had
+makes faces whose outline lies on those edges. PrePoMax draws it as the preview of a split. Run the
 executable with no arguments for the full grammar.
 
 `BREP_MERGE_SOLIDS <in.brep> <out.brep> <id> <id> ...` makes one solid of the named solids, numbered in

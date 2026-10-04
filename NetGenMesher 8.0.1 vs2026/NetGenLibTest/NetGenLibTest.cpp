@@ -1347,11 +1347,46 @@ static bool EdgeLiesOnEdges(const TopoDS_Edge & edge, const TopTools_IndexedMapO
 	}
 	return true;
 }
+// A face of a split lies on the faces the shape already had when a point inside it does. A piece of a face the
+// tool crossed lies on the face it came from, while a face the tool made runs through the inside of a solid.
+static bool FaceLiesOnFaces(const TopoDS_Face & face, const TopTools_IndexedMapOfShape & faces,
+                            const vector<Bnd_Box> & faceBoxes, double tolerance)
+{
+	BRepAdaptor_Surface surface(face);
+	double u1, u2, v1, v2;
+	BRepTools::UVBounds(face, u1, u2, v1, v2);
+	for (int i = 1; i <= 3; i++)
+	{
+		for (int j = 1; j <= 3; j++)
+		{
+			gp_Pnt2d uv(u1 + (u2 - u1) * i / 4.0, v1 + (v2 - v1) * j / 4.0);
+			BRepClass_FaceClassifier classifier(face, uv, Precision::PConfusion());
+			if (classifier.State() != TopAbs_IN) continue;
+			//
+			gp_Pnt point = surface.Value(uv.X(), uv.Y());
+			TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(point);
+			for (int k = 1; k <= faces.Extent(); k++)
+			{
+				if (faceBoxes[k - 1].IsOut(point)) continue;
+				//
+				const TopoDS_Face & oldFace = TopoDS::Face(faces(k));
+				BRepExtrema_DistShapeShape distance(vertex, oldFace);
+				if (distance.IsDone() && distance.Value() <= tolerance + BRep_Tool::Tolerance(face) +
+				                                             BRep_Tool::Tolerance(oldFace)) return true;
+			}
+			return false;
+		}
+	}
+	return true;
+}
 // The edges a split made, each written as a polyline of points on it, so that the caller can show where
 // the tool will cut without taking the result in. An edge the shape had before, whole or cut shorter, is
-// left out.
+// left out, except that with outlineNewFaces every edge of a face the split made is written: a tool that
+// runs along edges the shape already had makes a face whose outline lies on them, and that outline is
+// where it cuts.
 static bool WriteSplitPreviewEdges(const TopTools_IndexedMapOfShape & facesBefore,
-                                   const TopTools_IndexedMapOfShape & facesAfter, const char * fileName)
+                                   const TopTools_IndexedMapOfShape & facesAfter, const char * fileName,
+                                   bool outlineNewFaces)
 {
 	TopTools_IndexedMapOfShape edgesBefore;
 	TopTools_IndexedMapOfShape edgesAfter;
@@ -1371,6 +1406,23 @@ static bool WriteSplitPreviewEdges(const TopTools_IndexedMapOfShape & facesBefor
 		edgeBoxes[i - 1].Enlarge(tolerance + BRep_Tool::Tolerance(TopoDS::Edge(edgesBefore(i))));
 	}
 	//
+	TopTools_IndexedMapOfShape outlineEdges;
+	if (outlineNewFaces)
+	{
+		vector<Bnd_Box> faceBoxes(facesBefore.Extent());
+		for (int i = 1; i <= facesBefore.Extent(); i++)
+		{
+			BRepBndLib::Add(facesBefore(i), faceBoxes[i - 1]);
+			faceBoxes[i - 1].Enlarge(tolerance + BRep_Tool::Tolerance(TopoDS::Face(facesBefore(i))));
+		}
+		for (int i = 1; i <= facesAfter.Extent(); i++)
+		{
+			if (facesBefore.Contains(facesAfter(i))) continue;
+			if (!FaceLiesOnFaces(TopoDS::Face(facesAfter(i)), facesBefore, faceBoxes, tolerance))
+				TopExp::MapShapes(facesAfter(i), TopAbs_EDGE, outlineEdges);
+		}
+	}
+	//
 	ofstream file(fileName);
 	if (!file) return false;
 	file.precision(15);
@@ -1380,8 +1432,9 @@ static bool WriteSplitPreviewEdges(const TopTools_IndexedMapOfShape & facesBefor
 	for (int i = 1; i <= edgesAfter.Extent(); i++)
 	{
 		const TopoDS_Edge & edge = TopoDS::Edge(edgesAfter(i));
-		if (BRep_Tool::Degenerated(edge) || edgesBefore.Contains(edge)) continue;
-		if (EdgeLiesOnEdges(edge, edgesBefore, edgeBoxes, tolerance)) continue;
+		if (BRep_Tool::Degenerated(edge)) continue;
+		if (!outlineEdges.Contains(edge) &&
+		    (edgesBefore.Contains(edge) || EdgeLiesOnEdges(edge, edgesBefore, edgeBoxes, tolerance))) continue;
 		//
 		BRepAdaptor_Curve curve(edge);
 		GCPnts_TangentialDeflection points(curve, 0.1, 1e-3 * diagonal);
@@ -1634,7 +1687,7 @@ bool SplitGeometry(int argc, char* argv[], bool preview)
 		//
 		if (preview)
 		{
-			if (!WriteSplitPreviewEdges(facesBefore, FMap, argv[3]))
+			if (!WriteSplitPreviewEdges(facesBefore, FMap, argv[3], !splitShell))
 			{
 				cerr << "The edges the split made could not be written." << endl;
 				return 1;
