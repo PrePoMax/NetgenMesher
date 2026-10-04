@@ -90,7 +90,7 @@ bool ConvertToShell(int argc, char* argv[]);
 bool OffsetFaces(int argc, char* argv[]);
 bool RemoveFaces(int argc, char* argv[], bool compound);
 bool FuseFaces(int argc, char* argv[]);
-bool RepairBrep(int argc, char* argv[]);
+bool RepairBrep(int argc, char* argv[], bool preview);
 bool ConvertToSolid(int argc, char* argv[]);
 // Stl Mesh
 bool StlMesh(int argc, char* argv[]);
@@ -193,7 +193,8 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_REMOVE_FACES") == 0) return RemoveFaces(argc, argv, false);
 	else if (strcmp(argv[1], "BREP_REMOVE_COMPOUND_FACES") == 0) return RemoveFaces(argc, argv, true);
 	else if (strcmp(argv[1], "BREP_FUSE_FACES") == 0) return FuseFaces(argc, argv);
-	else if (strcmp(argv[1], "BREP_REPAIR") == 0) return RepairBrep(argc, argv);
+	else if (strcmp(argv[1], "BREP_REPAIR") == 0) return RepairBrep(argc, argv, false);
+	else if (strcmp(argv[1], "BREP_REPAIR_PREVIEW") == 0) return RepairBrep(argc, argv, true);
 	// Stl Mesh
 	else if (strcmp(argv[1], "STL_MESH") == 0) return StlMesh(argc, argv);
 	else if (strcmp(argv[1], "STL_SURFACE_MESH") == 0) return StlSurfaceMesh(argc, argv);
@@ -384,6 +385,10 @@ void PrintUsage(const char* exePath)
 	cout << "      edges, 4 remove small faces, 8 sew faces (no solids only), 16 fuse" << endl;
 	cout << "      faces on one surface and 32 join edges on one curve. Fails when the" << endl;
 	cout << "      repair changes the number of solids or breaks a valid shape." << endl;
+	cout << "  BREP_REPAIR_PREVIEW                <in.brep> <out.preview> <options> <tolerance>" << endl;
+	cout << "      Repairs as BREP_REPAIR does and writes only what it would take away:" << endl;
+	cout << "      every removed or sewn edge as Edge: <n> followed by n lines of x y z," << endl;
+	cout << "      and every removed vertex as Point: x y z." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -2304,7 +2309,116 @@ bool FuseFaces(int argc, char* argv[])
 	}
 	return 0;
 }
-bool RepairBrep(int argc, char* argv[])
+static vector<Bnd_Box> GetEdgeBoxes(const TopTools_IndexedMapOfShape & edges, double tolerance)
+{
+	vector<Bnd_Box> boxes(edges.Extent());
+	for (int i = 1; i <= edges.Extent(); i++)
+	{
+		BRepBndLib::Add(edges(i), boxes[i - 1]);
+		boxes[i - 1].Enlarge(tolerance + BRep_Tool::Tolerance(TopoDS::Edge(edges(i))));
+	}
+	return boxes;
+}
+// An edge is free when one face holds it and it is not the seam of that face
+static TopTools_IndexedMapOfShape GetFreeEdges(const TopoDS_Shape & shape)
+{
+	TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+	TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+	TopTools_IndexedMapOfShape freeEdges;
+	for (int i = 1; i <= edgeFaces.Extent(); i++)
+	{
+		TopTools_IndexedMapOfShape faces;
+		for (TopTools_ListOfShape::Iterator it(edgeFaces(i)); it.More(); it.Next()) faces.Add(it.Value());
+		const TopoDS_Edge & edge = TopoDS::Edge(edgeFaces.FindKey(i));
+		if (faces.Extent() == 1 && !BRep_Tool::Degenerated(edge) &&
+		    !BRep_Tool::IsClosed(edge, TopoDS::Face(faces(1)))) freeEdges.Add(edge);
+	}
+	return freeEdges;
+}
+// What a repair takes away from the shape, so that the caller can show where it changes the shape without
+// taking the result in. Every edge is written as a polyline of points on it and every vertex as a point. An
+// edge is taken away when a point sampled inside it lies on no edge of the result, which holds for the edge
+// between two fused faces, for a small edge and for the edges of a small face; an edge only joined with its
+// neighbour lies on the joined edge and is left out, while the vertex they shared is written, since no vertex
+// of the result is at its place. A free edge sewing closed lies on an edge of the result that is no longer free,
+// and is written as well.
+static bool WriteRepairPreview(const TopoDS_Shape & before, const TopoDS_Shape & after, const char * fileName)
+{
+	Bnd_Box shapeBox;
+	BRepBndLib::Add(before, shapeBox);
+	if (shapeBox.IsVoid()) return false;
+	double diagonal = sqrt(shapeBox.SquareExtent());
+	double tolerance = 1e-7 * diagonal;
+	//
+	TopTools_IndexedMapOfShape edgesBefore;
+	TopTools_IndexedMapOfShape edgesAfter;
+	TopExp::MapShapes(before, TopAbs_EDGE, edgesBefore);
+	TopExp::MapShapes(after, TopAbs_EDGE, edgesAfter);
+	vector<Bnd_Box> edgeBoxesAfter = GetEdgeBoxes(edgesAfter, tolerance);
+	TopTools_IndexedMapOfShape freeEdgesBefore = GetFreeEdges(before);
+	TopTools_IndexedMapOfShape freeEdgesAfter = GetFreeEdges(after);
+	vector<Bnd_Box> freeEdgeBoxesAfter = GetEdgeBoxes(freeEdgesAfter, tolerance);
+	//
+	ofstream file(fileName);
+	if (!file) return false;
+	file.precision(15);
+	file << "Repair preview format: 1" << endl;
+	//
+	int numOfRemovedEdges = 0;
+	int numOfSewnEdges = 0;
+	for (int i = 1; i <= edgesBefore.Extent(); i++)
+	{
+		const TopoDS_Edge & edge = TopoDS::Edge(edgesBefore(i));
+		if (BRep_Tool::Degenerated(edge)) continue;
+		//
+		bool removed = !EdgeLiesOnEdges(edge, edgesAfter, edgeBoxesAfter, tolerance);
+		bool sewn = !removed && freeEdgesBefore.Contains(edge) &&
+		            !EdgeLiesOnEdges(edge, freeEdgesAfter, freeEdgeBoxesAfter, tolerance);
+		if (!removed && !sewn) continue;
+		//
+		BRepAdaptor_Curve curve(edge);
+		GCPnts_TangentialDeflection points(curve, 0.1, 1e-3 * diagonal);
+		if (points.NbPoints() < 2) continue;
+		//
+		file << "Edge: " << points.NbPoints() << endl;
+		for (int j = 1; j <= points.NbPoints(); j++)
+		{
+			gp_Pnt point = points.Value(j);
+			file << point.X() << " " << point.Y() << " " << point.Z() << endl;
+		}
+		if (removed) numOfRemovedEdges++;
+		else numOfSewnEdges++;
+	}
+	//
+	TopTools_IndexedMapOfShape verticesBefore;
+	TopTools_IndexedMapOfShape verticesAfter;
+	TopExp::MapShapes(before, TopAbs_VERTEX, verticesBefore);
+	TopExp::MapShapes(after, TopAbs_VERTEX, verticesAfter);
+	int numOfRemovedVertices = 0;
+	for (int i = 1; i <= verticesBefore.Extent(); i++)
+	{
+		const TopoDS_Vertex & vertex = TopoDS::Vertex(verticesBefore(i));
+		gp_Pnt point = BRep_Tool::Pnt(vertex);
+		bool kept = false;
+		for (int j = 1; j <= verticesAfter.Extent() && !kept; j++)
+		{
+			const TopoDS_Vertex & vertexAfter = TopoDS::Vertex(verticesAfter(j));
+			kept = point.Distance(BRep_Tool::Pnt(vertexAfter)) <= tolerance + BRep_Tool::Tolerance(vertex) +
+			                                                       BRep_Tool::Tolerance(vertexAfter);
+		}
+		if (kept) continue;
+		//
+		file << "Point: " << point.X() << " " << point.Y() << " " << point.Z() << endl;
+		numOfRemovedVertices++;
+	}
+	file.close();
+	//
+	cout << "Repair preview finished successfully: " << numOfRemovedEdges << " edges and " << numOfRemovedVertices
+	     << " vertices would be removed and " << numOfSewnEdges << " free edges would be sewn." << endl;
+	return true;
+}
+// A preview writes what the repair would take away to <out> in place of the result
+bool RepairBrep(int argc, char* argv[], bool preview)
 {
 	try
 	{
@@ -2338,11 +2452,26 @@ bool RepairBrep(int argc, char* argv[])
 			cerr << "The geometry could not be repaired." << endl;
 			return 1;
 		}
+		string resultFileName = preview ? string(argv[3]) + ".brep" : string(argv[3]);
 		cout << "Ng_OCC_Save_BREP" << endl;
-		if (Ng_OCC_Save_BREP(occ_geom, argv[3]) != NG_OK)
+		if (Ng_OCC_Save_BREP(occ_geom, resultFileName.c_str()) != NG_OK)
 		{
-			cerr << "Error writing BREP file: " << argv[3] << endl;
+			cerr << "Error writing BREP file: " << resultFileName << endl;
 			return 1;
+		}
+		if (preview)
+		{
+			BRep_Builder builder;
+			TopoDS_Shape before;
+			TopoDS_Shape after;
+			bool read = BRepTools::Read(before, argv[2], builder) && BRepTools::Read(after, resultFileName.c_str(),
+			                                                                        builder);
+			remove(resultFileName.c_str());
+			if (!read || !WriteRepairPreview(before, after, argv[3]))
+			{
+				cerr << "Error writing the repair preview: " << argv[3] << endl;
+				return 1;
+			}
 		}
 	}
 	catch (const std::exception& e)

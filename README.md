@@ -81,6 +81,16 @@ tolerance its maximum), 4 remove small faces (`ShapeFix_FixSmallFace`), 2 remove
 vertices it left. A result with another number of solids, or one that is not valid when the input was, is
 refused. PrePoMax runs it for Repair.
 
+`BREP_REPAIR_PREVIEW <in.brep> <out.preview> <options> <tolerance>` repairs as `BREP_REPAIR` does and writes
+only what the repair takes away, after `Repair preview format: 1`: every edge of the input as `Edge: <n>`
+followed by n lines of `x y z` sampled on it, and every vertex as `Point: x y z`. The input and the result are
+compared by their geometry, since the repair steps copy what they touch: an edge is taken away when a point
+sampled inside it lies on no edge of the result, which holds for the edge between two fused faces, a small edge
+and the edges of a small face, while an edge only joined with its neighbour lies on the joined edge and is left
+out. A vertex is taken away when no vertex of the result is at its place, which is what joining edges leaves. A
+free edge is written when it lies on an edge of the result that is no longer free, which is what sewing closed.
+PrePoMax draws it as the preview of a repair.
+
 `BREP_REMOVE_FACES <in.brep> <out.brep> <numOfGroups> {<solid> <numOfFaces> <faceId> ...}` deletes the named
 faces and puts nothing in their place. The ids are grouped as `BREP_OFFSET_FACES` takes them: the ids of a group
 are numbered inside that solid, in explorer order, or in the face map of the whole shape when the solid is 0. A
