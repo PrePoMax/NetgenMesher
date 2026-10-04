@@ -745,6 +745,18 @@ DLL_HEADER Ng_OCC_Geometry* Ng_OCC_OffsetFaces(Ng_OCC_Geometry* geom, int* targe
 
 DLL_HEADER Ng_OCC_Geometry* Ng_OCC_RemoveFaces(Ng_OCC_Geometry* geom, int* targetSolids, int* targetFaceCounts, int numOfTargetGroups, int* faceIds, int* openedSolids, int maxOpenedSolids, int* numOfOpenedSolids, int* removedSolids, int* numOfRemovedSolids);
 
+// Fuses the named faces across the edges they share where they lie on one surface and bound the same solids
+DLL_HEADER Ng_OCC_Geometry* Ng_OCC_FuseFaces(Ng_OCC_Geometry* geom, int* targetSolids, int* targetFaceCounts, int numOfTargetGroups, int* faceIds);
+
+#define NG_OCC_REPAIR_FIX_SHAPE   1
+#define NG_OCC_REPAIR_SMALL_EDGES 2
+#define NG_OCC_REPAIR_SMALL_FACES 4
+#define NG_OCC_REPAIR_SEW_FACES   8
+#define NG_OCC_REPAIR_FUSE_FACES  16
+#define NG_OCC_REPAIR_JOIN_EDGES  32
+// Runs the repairs the NG_OCC_REPAIR_ options name on the whole shape
+DLL_HEADER Ng_OCC_Geometry* Ng_OCC_RepairShape(Ng_OCC_Geometry* geom, int options, double tolerance);
+
 #endif // OCCGEOMETRY
 
 

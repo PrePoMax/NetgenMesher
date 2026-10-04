@@ -89,6 +89,8 @@ bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool OffsetFaces(int argc, char* argv[]);
 bool RemoveFaces(int argc, char* argv[], bool compound);
+bool FuseFaces(int argc, char* argv[]);
+bool RepairBrep(int argc, char* argv[]);
 bool ConvertToSolid(int argc, char* argv[]);
 // Stl Mesh
 bool StlMesh(int argc, char* argv[]);
@@ -190,6 +192,8 @@ static int RunCommand(int argc, char* argv[])
 	else if (strcmp(argv[1], "BREP_OFFSET_FACES") == 0) return OffsetFaces(argc, argv);
 	else if (strcmp(argv[1], "BREP_REMOVE_FACES") == 0) return RemoveFaces(argc, argv, false);
 	else if (strcmp(argv[1], "BREP_REMOVE_COMPOUND_FACES") == 0) return RemoveFaces(argc, argv, true);
+	else if (strcmp(argv[1], "BREP_FUSE_FACES") == 0) return FuseFaces(argc, argv);
+	else if (strcmp(argv[1], "BREP_REPAIR") == 0) return RepairBrep(argc, argv);
 	// Stl Mesh
 	else if (strcmp(argv[1], "STL_MESH") == 0) return StlMesh(argc, argv);
 	else if (strcmp(argv[1], "STL_SURFACE_MESH") == 0) return StlSurfaceMesh(argc, argv);
@@ -369,6 +373,17 @@ void PrintUsage(const char* exePath)
 	cout << "      <out>_000k.brep, one file per piece, and <out>.opened lists the" << endl;
 	cout << "      solid each came from with its number of files." << endl;
 	cout << "      A solid that loses every face is gone and listed in <out>.removed." << endl;
+	cout << "  BREP_FUSE_FACES                    <in.brep> <out.brep> <numOfGroups>" << endl;
+	cout << "                                     {<solid> <numOfFaces> <faceId> ...}" << endl;
+	cout << "      Makes the faces one across the edges they share where they lie on" << endl;
+	cout << "      one surface and bound the same solids, and joins the edges at the" << endl;
+	cout << "      vertices of the edges taken out. Ids are grouped as for" << endl;
+	cout << "      BREP_REMOVE_FACES. Fails when no face was fused." << endl;
+	cout << "  BREP_REPAIR                        <in.brep> <out.brep> <options> <tolerance>" << endl;
+	cout << "      Repairs the whole shape. <options> adds up 1 fix shape, 2 remove small" << endl;
+	cout << "      edges, 4 remove small faces, 8 sew faces (no solids only), 16 fuse" << endl;
+	cout << "      faces on one surface and 32 join edges on one curve. Fails when the" << endl;
+	cout << "      repair changes the number of solids or breaks a valid shape." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -2209,6 +2224,133 @@ bool RemoveFaces(int argc, char* argv[], bool compound)
 		cerr << "Error: " << e.what() << endl;
 		return 1;
 	}
+}
+// The face ids are grouped as BREP_REMOVE_FACES takes them: the ids of a group are numbered inside that solid,
+// or in the face map of the whole shape when the solid is 0
+bool FuseFaces(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 7)
+		{
+			cerr << "BREP_FUSE_FACES takes an input file, an output file and the number of face groups, each"
+			     << " written as a solid number, a face count and that many face ids." << endl;
+			return 1;
+		}
+		std::string::size_type sz;
+		int numOfTargetGroups = std::stoi(argv[4], &sz);
+		if (numOfTargetGroups < 1)
+		{
+			cerr << "BREP_FUSE_FACES takes at least one face group." << endl;
+			return 1;
+		}
+		//
+		std::vector<int> targetSolids;
+		std::vector<int> targetFaceCounts;
+		std::vector<int> faceIdList;
+		int argument = 5;
+		for (int group = 0; group < numOfTargetGroups; group++)
+		{
+			if (argument + 1 >= argc)
+			{
+				cerr << "BREP_FUSE_FACES was given fewer face groups than it was told to expect." << endl;
+				return 1;
+			}
+			targetSolids.push_back(std::stoi(argv[argument++], &sz));
+			targetFaceCounts.push_back(std::stoi(argv[argument++], &sz));
+			for (int i = 0; i < targetFaceCounts[group]; i++)
+			{
+				if (argument >= argc)
+				{
+					cerr << "BREP_FUSE_FACES was given fewer face ids than it was told to expect." << endl;
+					return 1;
+				}
+				faceIdList.push_back(std::stoi(argv[argument++], &sz));
+			}
+		}
+		if (faceIdList.size() < 2)
+		{
+			cerr << "At least two face ids must be given." << endl;
+			return 1;
+		}
+		//
+		Ng_Init();
+		cout << "Ng_OCC_Load_BREP" << endl;
+		Ng_OCC_Geometry * occ_geom = Ng_OCC_Load_BREP(argv[2]);
+		if (!occ_geom)
+		{
+			cerr << "Error reading in BREP File: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Ng_OCC_FuseFaces" << endl;
+		occ_geom = Ng_OCC_FuseFaces(occ_geom, targetSolids.data(), targetFaceCounts.data(), numOfTargetGroups,
+		                            faceIdList.data());
+		if (!occ_geom)
+		{
+			cerr << "The selected faces could not be fused." << endl;
+			return 1;
+		}
+		cout << "Ng_OCC_Save_BREP" << endl;
+		if (Ng_OCC_Save_BREP(occ_geom, argv[3]) != NG_OK)
+		{
+			cerr << "Error writing BREP file: " << argv[3] << endl;
+			return 1;
+		}
+	}
+	catch (const std::exception& e)
+	{
+		cerr << "Error: " << e.what() << endl;
+		return 1;
+	}
+	return 0;
+}
+bool RepairBrep(int argc, char* argv[])
+{
+	try
+	{
+		if (argc < 6)
+		{
+			cerr << "BREP_REPAIR takes an input file, an output file, the sum of the repair options and a"
+			     << " tolerance." << endl;
+			return 1;
+		}
+		std::string::size_type sz;
+		int options = std::stoi(argv[4], &sz);
+		double tolerance = std::stod(argv[5], &sz);
+		if (options <= 0)
+		{
+			cerr << "BREP_REPAIR was given no repair to make." << endl;
+			return 1;
+		}
+		//
+		Ng_Init();
+		cout << "Ng_OCC_Load_BREP" << endl;
+		Ng_OCC_Geometry * occ_geom = Ng_OCC_Load_BREP(argv[2]);
+		if (!occ_geom)
+		{
+			cerr << "Error reading in BREP File: " << argv[2] << endl;
+			return 1;
+		}
+		cout << "Ng_OCC_RepairShape" << endl;
+		occ_geom = Ng_OCC_RepairShape(occ_geom, options, tolerance);
+		if (!occ_geom)
+		{
+			cerr << "The geometry could not be repaired." << endl;
+			return 1;
+		}
+		cout << "Ng_OCC_Save_BREP" << endl;
+		if (Ng_OCC_Save_BREP(occ_geom, argv[3]) != NG_OK)
+		{
+			cerr << "Error writing BREP file: " << argv[3] << endl;
+			return 1;
+		}
+	}
+	catch (const std::exception& e)
+	{
+		cerr << "Error: " << e.what() << endl;
+		return 1;
+	}
+	return 0;
 }
 bool ConvertToSolid(int argc, char* argv[])
 {

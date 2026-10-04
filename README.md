@@ -63,6 +63,24 @@ history of the defeaturing and written back in the order it was read, which is t
 sub parts of the compound in; a solid the defeaturing removed or split is refused. PrePoMax runs it for
 Defeature on the sub parts and split cells of a compound.
 
+`BREP_FUSE_FACES <in.brep> <out.brep> <numOfGroups> {<solid> <numOfFaces> <faceId> ...}` makes the named
+faces one, the ids grouped as `BREP_REMOVE_FACES` takes them. It is the heal `BREP_MERGE_SOLIDS` ends with, run
+on faces the caller names: an edge is taken out only when both of its faces are named and bound the same solids,
+and a seam only when its face is named, so `ShapeUpgrade_UnifySameDomain` merges faces lying on one surface
+across those edges alone and every other edge keeps its identity. The edges are then joined at the vertices of
+the edges taken out, which removes the points a split left on the edges it crossed. A face of a compound shared
+by two solids is fused only with faces those same two solids share, so the solids still meet. The result must
+be valid when the input was and hold the solids and shells it held; the command fails when no face was fused,
+which is what faces on different surfaces give. PrePoMax runs it for Fuse Faces.
+
+`BREP_REPAIR <in.brep> <out.brep> <options> <tolerance>` repairs the whole shape. `<options>` adds up 8 sew
+faces (`BRepBuilderAPI_Sewing`, only for a shape without solids), 1 fix shape (`ShapeFix_Shape`, the
+tolerance its maximum), 4 remove small faces (`ShapeFix_FixSmallFace`), 2 remove small edges
+(`ShapeFix_Wireframe`), 16 fuse faces (the `BREP_FUSE_FACES` heal on every face) and 32 join edges
+(`ShapeUpgrade_UnifySameDomain` on edges), and they run in that order. Each step writes the faces, edges and
+vertices it left. A result with another number of solids, or one that is not valid when the input was, is
+refused. PrePoMax runs it for Repair.
+
 `BREP_REMOVE_FACES <in.brep> <out.brep> <numOfGroups> {<solid> <numOfFaces> <faceId> ...}` deletes the named
 faces and puts nothing in their place. The ids are grouped as `BREP_OFFSET_FACES` takes them: the ids of a group
 are numbered inside that solid, in explorer order, or in the face map of the whole shape when the solid is 0. A

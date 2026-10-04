@@ -61,6 +61,11 @@
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffset_MakeSimpleOffset.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <TopTools_MapOfShape.hxx>
+#include <ShapeFix_Shape.hxx>
+#include <ShapeFix_Wireframe.hxx>
+#include <ShapeFix_FixSmallFace.hxx>
 #include <Standard_Failure.hxx>
 
 namespace netgen {
@@ -1926,6 +1931,262 @@ namespace nglib
 		//
 		return newoccgeo;
 	}
+	static int CountSubShapes(const TopoDS_Shape & shape, TopAbs_ShapeEnum type)
+	{
+		TopTools_IndexedMapOfShape subShapes;
+		TopExp::MapShapes(shape, type, subShapes);
+		return subShapes.Extent();
+	}
+	// Two faces may only become one when they bound the same solids, or a solid would hold a face its
+	// neighbour does not and the two would no longer meet
+	static bool BoundSameSolids(const TopoDS_Shape & first, const TopoDS_Shape & second,
+	                            const TopTools_IndexedDataMapOfShapeListOfShape & faceSolids)
+	{
+		TopTools_MapOfShape firstSolids;
+		TopTools_MapOfShape secondSolids;
+		int index = faceSolids.FindIndex(first);
+		if (index > 0)
+			for (TopTools_ListOfShape::Iterator it(faceSolids(index)); it.More(); it.Next()) firstSolids.Add(it.Value());
+		index = faceSolids.FindIndex(second);
+		if (index > 0)
+			for (TopTools_ListOfShape::Iterator it(faceSolids(index)); it.More(); it.Next()) secondSolids.Add(it.Value());
+		//
+		if (firstSolids.Extent() != secondSolids.Extent()) return false;
+		for (TopTools_MapOfShape::Iterator it(firstSolids); it.More(); it.Next())
+			if (!secondSolids.Contains(it.Value())) return false;
+		return true;
+	}
+	// The named faces are made one across the edges they share, where the faces on both sides lie on one
+	// surface. An edge is only taken out when both of its faces are named and bound the same solids, and a
+	// seam only when its face is named, so every other edge stays where it is and the shape is never moved.
+	// The edges are then joined at the vertices of the edges taken out, which takes out the points a split
+	// left on the edges it crossed. Answers the number of faces that were fused away, zero when there was
+	// nothing to fuse, and -1 when the result is not a valid shape of the same bodies, which is not used.
+	static int FuseFacesOfShape(const TopoDS_Shape & shape, const TopTools_IndexedMapOfShape & fusableFaces,
+	                            TopoDS_Shape & result)
+	{
+		result = shape;
+		//
+		TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+		TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+		TopTools_IndexedDataMapOfShapeListOfShape faceSolids;
+		TopExp::MapShapesAndAncestors(shape, TopAbs_FACE, TopAbs_SOLID, faceSolids);
+		//
+		TopTools_MapOfShape keepEdges;
+		TopTools_IndexedMapOfShape fusedEdgeVertices;
+		int numOfFusableEdges = 0;
+		for (int i = 1; i <= edgeFaces.Extent(); i++)
+		{
+			const TopoDS_Shape & edge = edgeFaces.FindKey(i);
+			TopTools_IndexedMapOfShape faces;
+			for (TopTools_ListOfShape::Iterator it(edgeFaces(i)); it.More(); it.Next()) faces.Add(it.Value());
+			//
+			bool fusable = faces.Extent() == 1 || faces.Extent() == 2;
+			for (int j = 1; fusable && j <= faces.Extent(); j++) fusable = fusableFaces.Contains(faces(j));
+			if (fusable && faces.Extent() == 1)
+				fusable = BRep_Tool::IsClosed(TopoDS::Edge(edge), TopoDS::Face(faces(1)));
+			if (fusable && faces.Extent() == 2) fusable = BoundSameSolids(faces(1), faces(2), faceSolids);
+			//
+			if (!fusable) keepEdges.Add(edge);
+			else if (faces.Extent() == 2)
+			{
+				numOfFusableEdges++;
+				TopExp::MapShapes(edge, TopAbs_VERTEX, fusedEdgeVertices);
+			}
+		}
+		if (numOfFusableEdges == 0) return 0;
+		//
+		int numOfFacesBefore = CountSubShapes(shape, TopAbs_FACE);
+		int numOfSolidsBefore = CountSubShapes(shape, TopAbs_SOLID);
+		int numOfShellsBefore = CountSubShapes(shape, TopAbs_SHELL);
+		bool validBefore = BRepCheck_Analyzer(shape).IsValid() == Standard_True;
+		// The edges that stay keep their identity, so a face that is not fused still shares them
+		ShapeUpgrade_UnifySameDomain unifyFaces(shape, Standard_False, Standard_True, Standard_False);
+		unifyFaces.KeepShapes(keepEdges);
+		unifyFaces.SetSafeInputMode(false);
+		unifyFaces.Build();
+		TopoDS_Shape fused = unifyFaces.Shape();
+		//
+		TopTools_MapOfShape keepVertices;
+		TopTools_IndexedMapOfShape vertices;
+		TopExp::MapShapes(fused, TopAbs_VERTEX, vertices);
+		for (int i = 1; i <= vertices.Extent(); i++)
+			if (!fusedEdgeVertices.Contains(vertices(i))) keepVertices.Add(vertices(i));
+		ShapeUpgrade_UnifySameDomain unifyEdges(fused, Standard_True, Standard_False, Standard_False);
+		unifyEdges.KeepShapes(keepVertices);
+		unifyEdges.SetSafeInputMode(false);
+		unifyEdges.Build();
+		fused = unifyEdges.Shape();
+		//
+		int numOfFacesAfter = CountSubShapes(fused, TopAbs_FACE);
+		if (numOfFacesAfter >= numOfFacesBefore) return 0;
+		if (CountSubShapes(fused, TopAbs_SOLID) != numOfSolidsBefore ||
+		    CountSubShapes(fused, TopAbs_SHELL) != numOfShellsBefore ||
+		    (validBefore && !BRepCheck_Analyzer(fused).IsValid())) return -1;
+		//
+		result = fused;
+		return numOfFacesBefore - numOfFacesAfter;
+	}
+	// The ids arrive grouped the way a face offset sends them: targetFaceCounts[i] of them are numbered
+	// inside solid targetSolids[i], and a solid of zero numbers them in the shape itself.
+	OCCGeometry * FuseFaces(Ng_OCC_Geometry * geom, int * targetSolids, int * targetFaceCounts,
+	                        int numOfTargetGroups, int * faceIds)
+	{
+		OCCGeometry * occgeom = (OCCGeometry*)geom;
+		//
+		TopTools_IndexedMapOfShape faces;
+		if (!GetTargetFaces(occgeom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds, faces))
+		{
+			cout << "None of the selected faces was found in the geometry." << endl;
+			return NULL;
+		}
+		if (faces.Extent() < 2)
+		{
+			cout << "Fusing faces needs at least two faces that share an edge." << endl;
+			return NULL;
+		}
+		//
+		TopoDS_Shape result;
+		int numOfFusedFaces = FuseFacesOfShape(occgeom->shape, faces, result);
+		if (numOfFusedFaces < 0)
+		{
+			cout << "The fused faces do not make a valid shape, so the geometry was left as it was." << endl;
+			return NULL;
+		}
+		if (numOfFusedFaces == 0)
+		{
+			cout << "None of the selected faces could be fused. Faces are fused across an edge they share, " <<
+			        "when they lie on one surface and bound the same solids." << endl;
+			return NULL;
+		}
+		cout << "Fuse faces: " << faces.Extent() << " selected faces became " << faces.Extent() - numOfFusedFaces
+		     << "." << endl;
+		//
+		OCCGeometry * newoccgeo = new OCCGeometry;
+		newoccgeo->shape = result;
+		newoccgeo->changed = 1;
+		newoccgeo->BuildFMap();
+		//
+		return newoccgeo;
+	}
+	static void WriteRepairStep(const char * step, const TopoDS_Shape & before, const TopoDS_Shape & after)
+	{
+		cout << "Repair - " << step << ": faces " << CountSubShapes(before, TopAbs_FACE) << " -> " <<
+		        CountSubShapes(after, TopAbs_FACE) << ", edges " << CountSubShapes(before, TopAbs_EDGE) <<
+		        " -> " << CountSubShapes(after, TopAbs_EDGE) << ", vertices " <<
+		        CountSubShapes(before, TopAbs_VERTEX) << " -> " << CountSubShapes(after, TopAbs_VERTEX) << endl;
+	}
+	// The repairs the options name run in a fixed order, each on what the one before left: sewing first,
+	// since the fixes need faces that are connected, then the shape fixes, the small faces and the small
+	// edges, which leave faces and edges on one surface or curve that the fusing and joining take out. A
+	// repair never adds or removes a solid, and a result that is no longer valid when the input was is not
+	// used, so a repair that cannot help leaves the geometry as it was.
+	OCCGeometry * RepairShape(Ng_OCC_Geometry * geom, int options, double tolerance)
+	{
+		OCCGeometry * occgeom = (OCCGeometry*)geom;
+		TopoDS_Shape shape = occgeom->shape;
+		if (tolerance <= 0) tolerance = Precision::Confusion();
+		//
+		int numOfSolidsBefore = CountSubShapes(shape, TopAbs_SOLID);
+		bool validBefore = BRepCheck_Analyzer(shape).IsValid() == Standard_True;
+		TopoDS_Shape before;
+		//
+		if (options & NG_OCC_REPAIR_SEW_FACES)
+		{
+			if (numOfSolidsBefore > 0) cout << "Repair - sew faces: skipped, the geometry holds solids." << endl;
+			else
+			{
+				before = shape;
+				BRepBuilderAPI_Sewing sewing(tolerance);
+				sewing.Add(shape);
+				sewing.Perform();
+				if (!sewing.SewedShape().IsNull()) shape = sewing.SewedShape();
+				WriteRepairStep("sew faces", before, shape);
+			}
+		}
+		if (options & NG_OCC_REPAIR_FIX_SHAPE)
+		{
+			before = shape;
+			Handle(ShapeFix_Shape) shapeFix = new ShapeFix_Shape;
+			shapeFix->Init(shape);
+			shapeFix->SetPrecision(Precision::Confusion());
+			shapeFix->SetMaxTolerance(tolerance);
+			shapeFix->Perform();
+			if (shapeFix->Status(ShapeExtend_DONE)) shape = shapeFix->Shape();
+			WriteRepairStep(shapeFix->Status(ShapeExtend_DONE) ? "fix shape" : "fix shape (nothing to fix)",
+			                before, shape);
+		}
+		if (options & NG_OCC_REPAIR_SMALL_FACES)
+		{
+			before = shape;
+			Handle(ShapeFix_FixSmallFace) smallFaceFix = new ShapeFix_FixSmallFace();
+			smallFaceFix->Init(shape);
+			smallFaceFix->SetPrecision(tolerance);
+			smallFaceFix->SetMaxTolerance(tolerance);
+			smallFaceFix->Perform();
+			shape = smallFaceFix->FixShape();
+			WriteRepairStep("remove small faces", before, shape);
+		}
+		if (options & NG_OCC_REPAIR_SMALL_EDGES)
+		{
+			before = shape;
+			Handle(ShapeFix_Wireframe) wireframeFix = new ShapeFix_Wireframe(shape);
+			wireframeFix->SetPrecision(tolerance);
+			wireframeFix->SetMaxTolerance(tolerance);
+			wireframeFix->ModeDropSmallEdges() = Standard_True;
+			wireframeFix->FixSmallEdges();
+			wireframeFix->FixWireGaps();
+			shape = wireframeFix->Shape();
+			WriteRepairStep("remove small edges", before, shape);
+		}
+		if (options & NG_OCC_REPAIR_FUSE_FACES)
+		{
+			before = shape;
+			TopTools_IndexedMapOfShape faces;
+			TopExp::MapShapes(shape, TopAbs_FACE, faces);
+			TopoDS_Shape fused;
+			if (FuseFacesOfShape(shape, faces, fused) < 0)
+				cout << "Repair - fuse faces: skipped, the fused faces do not make a valid shape." << endl;
+			else shape = fused;
+			WriteRepairStep("fuse faces", before, shape);
+		}
+		if (options & NG_OCC_REPAIR_JOIN_EDGES)
+		{
+			before = shape;
+			ShapeUpgrade_UnifySameDomain unifyEdges(shape, Standard_True, Standard_False, Standard_False);
+			unifyEdges.Build();
+			shape = unifyEdges.Shape();
+			WriteRepairStep("join edges", before, shape);
+		}
+		//
+		if (CountSubShapes(shape, TopAbs_FACE) == 0)
+		{
+			cout << "The repair left no face, so the geometry was left as it was." << endl;
+			return NULL;
+		}
+		if (CountSubShapes(shape, TopAbs_SOLID) != numOfSolidsBefore)
+		{
+			cout << "The repair changed the number of solids from " << numOfSolidsBefore << " to " <<
+			        CountSubShapes(shape, TopAbs_SOLID) << ", so the geometry was left as it was." << endl;
+			return NULL;
+		}
+		bool validAfter = BRepCheck_Analyzer(shape).IsValid() == Standard_True;
+		if (validBefore && !validAfter)
+		{
+			cout << "The repaired geometry is not valid, so the geometry was left as it was." << endl;
+			return NULL;
+		}
+		if (!validBefore)
+			cout << (validAfter ? "The geometry was not valid and is valid after the repair." :
+			                      "The geometry was not valid and is still not valid after the repair.") << endl;
+		//
+		OCCGeometry * newoccgeo = new OCCGeometry;
+		newoccgeo->shape = shape;
+		newoccgeo->changed = 1;
+		newoccgeo->BuildFMap();
+		//
+		return newoccgeo;
+	}
 	bool WriteShapeToBrepFile(const TopoDS_Shape& shape, const char* filename, int numOfSplitFaces)
 	{
 		bool result = false;
@@ -3011,6 +3272,43 @@ namespace nglib
 		catch (exception ex)
 		{
 			PrintMessage(1, "An error occurred in Ng_OCC_RemoveFaces.");
+		}
+		return NULL;
+	}
+
+	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_FuseFaces(Ng_OCC_Geometry* geom, int* targetSolids, int* targetFaceCounts,
+	                                             int numOfTargetGroups, int* faceIds)
+	{
+		try
+		{
+			OCCGeometry* occgeom = FuseFaces(geom, targetSolids, targetFaceCounts, numOfTargetGroups, faceIds);
+			return ((Ng_OCC_Geometry*)occgeom);
+		}
+		catch (Standard_Failure & ex)
+		{
+			cout << "Fusing the faces failed: " << ex.GetMessageString() << endl;
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_FuseFaces.");
+		}
+		return NULL;
+	}
+
+	DLL_HEADER Ng_OCC_Geometry* Ng_OCC_RepairShape(Ng_OCC_Geometry* geom, int options, double tolerance)
+	{
+		try
+		{
+			OCCGeometry* occgeom = RepairShape(geom, options, tolerance);
+			return ((Ng_OCC_Geometry*)occgeom);
+		}
+		catch (Standard_Failure & ex)
+		{
+			cout << "Repairing the geometry failed: " << ex.GetMessageString() << endl;
+		}
+		catch (exception ex)
+		{
+			PrintMessage(1, "An error occurred in Ng_OCC_RepairShape.");
 		}
 		return NULL;
 	}
