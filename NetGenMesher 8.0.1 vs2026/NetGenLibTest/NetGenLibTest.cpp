@@ -69,6 +69,8 @@ bool AssemblySplitBrepToCompounds(int argc, char* argv[]);
 bool AssemblySplitBrepToParts(int argc, char* argv[]);
 // Assembly - Create
 bool CompoundBrep(int argc, char* argv[]);
+static bool RemoveRepeatedCompoundSolids(const char * fileName);
+static bool WriteCompoundSolidOrigins(int argc, char* argv[]);
 bool AssemblyBrep(int argc, char* argv[], bool saveAsStep);
 // Part
 bool SaveBrepAsStep(int argc, char* argv[]);
@@ -268,6 +270,9 @@ void PrintUsage(const char* exePath)
 	cout << "  STEP_ASSEMBLY                      <in1.brep> <in2.brep> [...] <out.step>" << endl;
 	cout << "      BREP_COMPOUND imprints the parts on one another; the two assembly" << endl;
 	cout << "      commands only gather them into one compound, unchanged." << endl;
+	cout << "      BREP_COMPOUND writes <out.brep>.origins: one line per solid of the" << endl;
+	cout << "      result, listing every input solid it lies in, numbered over all the" << endl;
+	cout << "      input files in order, or 0 where it lies in none." << endl;
 	cout << endl;
 	cout << "Part" << endl;
 	cout << "  SAVE_BREP_AS_STEP                  <in.brep> <out.step>" << endl;
@@ -506,6 +511,14 @@ bool CompoundBrep(int argc, char* argv[])
 			cout << "Error combining BREP files." << endl;
 			return 1;
 		}
+		if (!RemoveRepeatedCompoundSolids(argv[argc - 1]))
+		{
+			cout << "Error removing the repeated solids of the compound." << endl;
+			return 1;
+		}
+		// The compound is usable without the origins, so a failure to write them is only reported
+		if (!WriteCompoundSolidOrigins(argc, argv))
+			cout << "The solids the compound solids came from could not be written." << endl;
 		return 0;
 	}
 	catch (exception ex)
@@ -1184,6 +1197,97 @@ static bool WriteSplitSolidOrigins(const TopoDS_Shape & inputShape, const char *
 	ofstream originsFile(originsFileName);
 	if (!originsFile) return false;
 	for (size_t i = 0; i < origins.size(); i++) originsFile << origins[i] << endl;
+	originsFile.close();
+	//
+	return true;
+}
+// The general fuse gives every argument its own image, so the solid where two parts overlap is listed once in the
+// image of each of them, and a reader walking the result would take it twice. Each solid is kept once, in the order
+// it first appears. A result with a face that lies on no solid holds more than solids and is left as it is.
+static bool RemoveRepeatedCompoundSolids(const char * fileName)
+{
+	BRep_Builder builder;
+	TopoDS_Shape shape;
+	if (!BRepTools::Read(shape, fileName, builder)) return false;
+	//
+	TopTools_IndexedMapOfShape solids;
+	int numOfSolidOccurrences = 0;
+	for (TopExp_Explorer exp0(shape, TopAbs_SOLID); exp0.More(); exp0.Next())
+	{
+		solids.Add(exp0.Current());
+		numOfSolidOccurrences++;
+	}
+	if (solids.Extent() == numOfSolidOccurrences) return true;
+	//
+	TopTools_IndexedMapOfShape faces;
+	TopTools_IndexedMapOfShape solidFaces;
+	TopExp::MapShapes(shape, TopAbs_FACE, faces);
+	for (int i = 1; i <= solids.Extent(); i++) TopExp::MapShapes(solids(i), TopAbs_FACE, solidFaces);
+	if (faces.Extent() != solidFaces.Extent()) return true;
+	//
+	TopoDS_Compound compound;
+	builder.MakeCompound(compound);
+	for (int i = 1; i <= solids.Extent(); i++) builder.Add(compound, solids(i));
+	BRepTools::Write(compound, fileName, Message_ProgressRange());
+	cout << "Solids listed more than once: " << numOfSolidOccurrences - solids.Extent() << " were removed." << endl;
+	//
+	return true;
+}
+// A compound imprints its parts on one another, so a solid of the result lies inside one solid it was given
+// or, where the parts overlap, inside several. All of them are written next to the result, one line per
+// solid in the order the explorer walks them, numbered over the solids of all the input files in the order
+// the files were given, or 0 where no solid holds it. The caller decides what a solid of several parts is.
+static bool WriteCompoundSolidOrigins(int argc, char* argv[])
+{
+	const char * outputFileName = argv[argc - 1];
+	BRep_Builder builder;
+	vector<TopoDS_Shape> inputSolids;
+	vector<Bnd_Box> inputBoxes;
+	for (int i = 2; i < argc - 1; i++)
+	{
+		TopoDS_Shape inputShape;
+		if (!BRepTools::Read(inputShape, argv[i], builder)) return false;
+		for (TopExp_Explorer exp0(inputShape, TopAbs_SOLID); exp0.More(); exp0.Next())
+		{
+			Bnd_Box box;
+			BRepBndLib::Add(exp0.Current(), box);
+			inputSolids.push_back(exp0.Current());
+			inputBoxes.push_back(box);
+		}
+	}
+	//
+	TopoDS_Shape outputShape;
+	if (!BRepTools::Read(outputShape, outputFileName, builder)) return false;
+	//
+	vector<vector<int>> origins;
+	for (TopExp_Explorer exp0(outputShape, TopAbs_SOLID); exp0.More(); exp0.Next())
+	{
+		vector<int> solidOrigins;
+		gp_Pnt inside;
+		if (FindPointInsideSolid(exp0.Current(), inside))
+		{
+			Bnd_Box box;
+			BRepBndLib::Add(exp0.Current(), box);
+			double tolerance = 1e-7 * sqrt(box.SquareExtent());
+			for (size_t i = 0; i < inputSolids.size(); i++)
+			{
+				if (inputBoxes[i].IsOut(inside)) continue;
+				BRepClass3d_SolidClassifier classifier(inputSolids[i], inside, tolerance);
+				if (classifier.State() == TopAbs_IN) solidOrigins.push_back((int)i + 1);
+			}
+		}
+		origins.push_back(solidOrigins);
+	}
+	//
+	string originsFileName = string(outputFileName) + ".origins";
+	ofstream originsFile(originsFileName);
+	if (!originsFile) return false;
+	for (size_t i = 0; i < origins.size(); i++)
+	{
+		if (origins[i].size() == 0) originsFile << 0;
+		for (size_t j = 0; j < origins[i].size(); j++) originsFile << (j > 0 ? " " : "") << origins[i][j];
+		originsFile << endl;
+	}
 	originsFile.close();
 	//
 	return true;
