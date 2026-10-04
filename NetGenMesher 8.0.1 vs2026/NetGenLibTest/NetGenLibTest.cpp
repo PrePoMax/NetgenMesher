@@ -1316,9 +1316,11 @@ static bool WriteCompoundSolidOrigins(int argc, char* argv[])
 }
 // An edge of a split lies on the edges the shape already had when every point sampled inside it does. A
 // piece of an edge the tool crossed is the same curve cut shorter, so its points lie on the edge it came
-// from, while an edge the tool made runs across faces and meets the old edges only at its ends.
+// from, while an edge the tool made runs across faces and meets the old edges only at its ends. The
+// tolerances the edges carry are added to the distance allowed, unless the edges are those of a repair,
+// which grows them to cover what it merged and would hide an edge smaller than that.
 static bool EdgeLiesOnEdges(const TopoDS_Edge & edge, const TopTools_IndexedMapOfShape & edges,
-                            const vector<Bnd_Box> & edgeBoxes, double tolerance)
+                            const vector<Bnd_Box> & edgeBoxes, double tolerance, bool addEdgesTolerance = true)
 {
 	BRepAdaptor_Curve curve(edge);
 	double first = curve.FirstParameter();
@@ -1336,8 +1338,9 @@ static bool EdgeLiesOnEdges(const TopoDS_Edge & edge, const TopTools_IndexedMapO
 			//
 			const TopoDS_Edge & oldEdge = TopoDS::Edge(edges(i));
 			BRepExtrema_DistShapeShape distance(vertex, oldEdge);
-			if (distance.IsDone() && distance.Value() <= tolerance + BRep_Tool::Tolerance(edge) +
-			                                             BRep_Tool::Tolerance(oldEdge))
+			double allowed = tolerance + BRep_Tool::Tolerance(edge) +
+			                 (addEdgesTolerance ? BRep_Tool::Tolerance(oldEdge) : 0);
+			if (distance.IsDone() && distance.Value() <= allowed)
 				onEdge = true;
 		}
 		if (!onEdge) return false;
@@ -2338,7 +2341,8 @@ static TopTools_IndexedMapOfShape GetFreeEdges(const TopoDS_Shape & shape)
 	return freeEdges;
 }
 // What a repair takes away from the shape, so that the caller can show where it changes the shape without
-// taking the result in. Every edge is written as a polyline of points on it and every vertex as a point. An
+// taking the result in. Only the tolerances of the shape before the repair are allowed for: a repair grows the
+// tolerances of what it merges to cover it, so those of the result would hide the small edges it removed. Every edge is written as a polyline of points on it and every vertex as a point. An
 // edge is taken away when a point sampled inside it lies on no edge of the result, which holds for the edge
 // between two fused faces, for a small edge and for the edges of a small face; an edge only joined with its
 // neighbour lies on the joined edge and is left out, while the vertex they shared is written, since no vertex
@@ -2373,9 +2377,9 @@ static bool WriteRepairPreview(const TopoDS_Shape & before, const TopoDS_Shape &
 		const TopoDS_Edge & edge = TopoDS::Edge(edgesBefore(i));
 		if (BRep_Tool::Degenerated(edge)) continue;
 		//
-		bool removed = !EdgeLiesOnEdges(edge, edgesAfter, edgeBoxesAfter, tolerance);
+		bool removed = !EdgeLiesOnEdges(edge, edgesAfter, edgeBoxesAfter, tolerance, false);
 		bool sewn = !removed && freeEdgesBefore.Contains(edge) &&
-		            !EdgeLiesOnEdges(edge, freeEdgesAfter, freeEdgeBoxesAfter, tolerance);
+		            !EdgeLiesOnEdges(edge, freeEdgesAfter, freeEdgeBoxesAfter, tolerance, false);
 		if (!removed && !sewn) continue;
 		//
 		BRepAdaptor_Curve curve(edge);
@@ -2405,8 +2409,7 @@ static bool WriteRepairPreview(const TopoDS_Shape & before, const TopoDS_Shape &
 		for (int j = 1; j <= verticesAfter.Extent() && !kept; j++)
 		{
 			const TopoDS_Vertex & vertexAfter = TopoDS::Vertex(verticesAfter(j));
-			kept = point.Distance(BRep_Tool::Pnt(vertexAfter)) <= tolerance + BRep_Tool::Tolerance(vertex) +
-			                                                       BRep_Tool::Tolerance(vertexAfter);
+			kept = point.Distance(BRep_Tool::Pnt(vertexAfter)) <= tolerance + BRep_Tool::Tolerance(vertex);
 		}
 		if (kept) continue;
 		//
