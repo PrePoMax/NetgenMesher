@@ -386,9 +386,11 @@ void PrintUsage(const char* exePath)
 	cout << "      faces on one surface and 32 join edges on one curve. Fails when the" << endl;
 	cout << "      repair changes the number of solids or breaks a valid shape." << endl;
 	cout << "  BREP_REPAIR_PREVIEW                <in.brep> <out.preview> <options> <tolerance>" << endl;
+	cout << "                                     [maxSplitFaces]" << endl;
 	cout << "      Repairs as BREP_REPAIR does and writes only what it would take away:" << endl;
 	cout << "      every removed or sewn edge as Edge: <n> followed by n lines of x y z," << endl;
-	cout << "      and every removed vertex as Point: x y z." << endl;
+	cout << "      and every removed vertex as Point: x y z. The result is compared with" << endl;
+	cout << "      its closed faces divided as BREP_SPLIT_CLOSED_FACES divides them." << endl;
 	cout << "  BREP_CONVERT_SOLID_TO_SHELL        <in.brep> <out.brep>" << endl;
 	cout << "  BREP_CONVERT_SHELL_TO_SOLID        <in.brep> <out.brep>" << endl;
 	cout << endl;
@@ -2453,8 +2455,12 @@ bool RepairBrep(int argc, char* argv[], bool preview)
 			return 1;
 		}
 		string resultFileName = preview ? string(argv[3]) + ".brep" : string(argv[3]);
+		// The caller divides every closed face of a repaired shape, so a preview divides them as well; a fused
+		// face that closes on itself is divided again, and its seams are not taken away
+		int numOfSplitFaces = preview && argc > 6 ? std::stoi(argv[6], &sz) : 1;
 		cout << "Ng_OCC_Save_BREP" << endl;
-		if (Ng_OCC_Save_BREP(occ_geom, resultFileName.c_str()) != NG_OK)
+		if ((numOfSplitFaces > 1 ? Ng_OCC_SaveBrepWithSplitClosedFaces(occ_geom, resultFileName.c_str(), numOfSplitFaces) :
+		                           Ng_OCC_Save_BREP(occ_geom, resultFileName.c_str())) != NG_OK)
 		{
 			cerr << "Error writing BREP file: " << resultFileName << endl;
 			return 1;
