@@ -35,6 +35,8 @@
 #include "BRepBuilderAPI_MakeVertex.hxx"
 #include "BRepExtrema_DistShapeShape.hxx"
 #include "BRepAlgoAPI_Defeaturing.hxx"
+#include "BRepAlgoAPI_Splitter.hxx"
+#include "TopTools_DataMapOfShapeInteger.hxx"
 #include "BRepCheck_Analyzer.hxx"
 #include "Standard_Failure.hxx"
 #include "GCPnts_TangentialDeflection.hxx"
@@ -85,6 +87,8 @@ bool RemoveSolids(int argc, char* argv[]);
 bool MergeSolids(int argc, char* argv[]);
 bool DefeatureBrep(int argc, char* argv[]);
 bool DefeatureCompoundBrep(int argc, char* argv[]);
+TopoDS_Shape RestoreMergedFaces(const TopoDS_Shape& inputShape, BRepAlgoAPI_Defeaturing& defeaturing,
+								const TopoDS_Shape& result);
 bool SplitClosedFaces(int argc, char* argv[]);
 bool ConvertToShell(int argc, char* argv[]);
 bool OffsetFaces(int argc, char* argv[]);
@@ -354,7 +358,9 @@ void PrintUsage(const char* exePath)
 	cout << "      and the parts taken from it are numbered the same.  Defaults to 1," << endl;
 	cout << "      which divides nothing." << endl;
 	cout << "  BREP_DEFEATURE                     <in.brep> <out.brep> <faceId> [faceId ...]" << endl;
-	cout << "      Removes selected faces from one CAD solid and closes the gap." << endl;
+	cout << "      Removes selected faces from one CAD solid and closes the gap. The" << endl;
+	cout << "      splits of every other face - the halves of a periodic face, the pieces" << endl;
+	cout << "      of a shell split - are kept." << endl;
 	cout << "  BREP_DEFEATURE_COMPOUND            <in.brep> <out.brep> <numOfGroups>" << endl;
 	cout << "                                     {<solid> <numOfFaces> <faceId> ...}" << endl;
 	cout << "      As BREP_DEFEATURE, for a compound of solids defeatured as a whole, so" << endl;
@@ -1024,6 +1030,146 @@ bool MergeSolids(int argc, char* argv[])
 	}
 	return 0;
 }
+// The defeaturing of the modelling kernel simplifies its result: every two neighbouring faces that lie on one
+// surface are made one, anywhere in the shape and not only around the removed features. A periodic face split in
+// two halves comes back as one closed face and a face a shell split divided comes back whole, so splits the model
+// was given - by the exporter of the CAD file or in PrePoMax - were lost to a defeaturing of something else.
+// The edges that separated two input faces which came out as one face are cut into the result again, the way a
+// shell split cuts them, so that only the faces of the removed features change. An edge only one of the two faces
+// keeps, or one the removed features touched, leaves a face that is not cut through, and the result is then kept
+// as the defeaturing made it.
+TopoDS_Shape RestoreMergedFaces(const TopoDS_Shape& inputShape, BRepAlgoAPI_Defeaturing& defeaturing,
+								const TopoDS_Shape& result)
+{
+	TopTools_IndexedMapOfShape resultFaces;
+	TopTools_IndexedMapOfShape resultEdges;
+	TopExp::MapShapes(result, TopAbs_FACE, resultFaces);
+	TopExp::MapShapes(result, TopAbs_EDGE, resultEdges);
+	// The face of the result every input face became
+	TopTools_IndexedMapOfShape inputFaces;
+	TopExp::MapShapes(inputShape, TopAbs_FACE, inputFaces);
+	TopTools_DataMapOfShapeInteger faceImages;
+	for (int i = 1; i <= inputFaces.Extent(); i++)
+	{
+		const TopoDS_Shape& face = inputFaces(i);
+		if (defeaturing.IsDeleted(face)) continue;
+		const TopTools_ListOfShape& modified = defeaturing.Modified(face);
+		if (modified.Extent() > 1) continue;
+		int index = resultFaces.FindIndex(modified.IsEmpty() ? face : modified.First());
+		if (index > 0) faceImages.Bind(face, index);
+	}
+	// The edges between two faces that became one, which the result no longer holds
+	TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+	TopExp::MapShapesAndAncestors(inputShape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+	TopTools_ListOfShape tools;
+	for (int i = 1; i <= edgeFaces.Extent(); i++)
+	{
+		TopTools_IndexedMapOfShape faces;
+		for (TopTools_ListIteratorOfListOfShape it(edgeFaces(i)); it.More(); it.Next()) faces.Add(it.Value());
+		if (faces.Extent() != 2) continue;
+		if (!faceImages.IsBound(faces(1)) || !faceImages.IsBound(faces(2))) continue;
+		if (faceImages.Find(faces(1)) != faceImages.Find(faces(2))) continue;
+		const TopoDS_Shape& edge = edgeFaces.FindKey(i);
+		bool kept = resultEdges.Contains(edge);
+		if (!defeaturing.IsDeleted(edge))
+		{
+			for (TopTools_ListIteratorOfListOfShape it(defeaturing.Modified(edge)); it.More() && !kept; it.Next())
+				kept = resultEdges.Contains(it.Value());
+		}
+		if (!kept) tools.Append(edge);
+	}
+	// An edge that ended on the removed features no longer reaches across its face, and cut in it would leave the
+	// face with an edge inside: only the edges whose ends lie on the edges of the result, or on another edge cut in
+	// again, are cut
+	TopoDS_Compound resultEdgeCompound;
+	BRep_Builder edgeBuilder;
+	edgeBuilder.MakeCompound(resultEdgeCompound);
+	for (int i = 1; i <= resultEdges.Extent(); i++) edgeBuilder.Add(resultEdgeCompound, resultEdges(i));
+	int numOfDropped = 0;
+	while (true)
+	{
+		TopoDS_Shape loose;
+		for (TopTools_ListIteratorOfListOfShape it(tools); it.More() && loose.IsNull(); it.Next())
+		{
+			for (TopExp_Explorer exp0(it.Value(), TopAbs_VERTEX); exp0.More() && loose.IsNull(); exp0.Next())
+			{
+				const TopoDS_Vertex& vertex = TopoDS::Vertex(exp0.Current());
+				bool held = false;
+				for (TopTools_ListIteratorOfListOfShape other(tools); other.More() && !held; other.Next())
+				{
+					if (other.Value().IsSame(it.Value())) continue;
+					for (TopExp_Explorer exp1(other.Value(), TopAbs_VERTEX); exp1.More() && !held; exp1.Next())
+						held = exp1.Current().IsSame(vertex);
+				}
+				if (!held)
+				{
+					BRepExtrema_DistShapeShape distance(vertex, resultEdgeCompound);
+					double tolerance = std::max(10 * BRep_Tool::Tolerance(vertex), 1E-5);
+					held = distance.IsDone() && distance.Value() <= tolerance;
+				}
+				if (!held) loose = it.Value();
+			}
+		}
+		if (loose.IsNull()) break;
+		tools.Remove(loose);
+		numOfDropped++;
+	}
+	if (numOfDropped > 0)
+		cout << "WARNING: " << numOfDropped << " edges between faces the defeaturing joined ended on the removed"
+			 << " features and were not restored." << endl;
+	if (tools.IsEmpty()) return result;
+	//
+	BRepAlgoAPI_Splitter splitter;
+	TopTools_ListOfShape arguments;
+	arguments.Append(result);
+	splitter.SetArguments(arguments);
+	splitter.SetTools(tools);
+	splitter.SetRunParallel(false);
+	splitter.Build();
+	if (!splitter.IsDone())
+	{
+		cout << "WARNING: the faces the defeaturing joined could not be split again." << endl;
+		return result;
+	}
+	// The solids in the order of the result, the one solid of a solid
+	TopoDS_Compound split;
+	BRep_Builder builder;
+	builder.MakeCompound(split);
+	int numOfSolids = 0;
+	for (TopExp_Explorer exp0(result, TopAbs_SOLID); exp0.More(); exp0.Next())
+	{
+		const TopTools_ListOfShape& modified = splitter.Modified(exp0.Current());
+		if (modified.Extent() > 1)
+		{
+			cout << "WARNING: splitting the joined faces again cut a solid, so they were left joined." << endl;
+			return result;
+		}
+		builder.Add(split, modified.IsEmpty() ? exp0.Current() : modified.First());
+		numOfSolids++;
+	}
+	TopoDS_Shape restored = split;
+	if (result.ShapeType() == TopAbs_SOLID && numOfSolids == 1) restored = TopoDS_Iterator(split).Value();
+	// An edge that does not cut its face through stays inside it
+	for (TopExp_Explorer exp0(restored, TopAbs_EDGE); exp0.More(); exp0.Next())
+	{
+		if (exp0.Current().Orientation() == TopAbs_INTERNAL)
+		{
+			cout << "WARNING: an edge between faces the defeaturing joined no longer cuts its face through, so the"
+				 << " faces were left joined." << endl;
+			return result;
+		}
+	}
+	if (!BRepCheck_Analyzer(restored).IsValid())
+	{
+		cout << "WARNING: the faces the defeaturing joined could not be split again into a valid shape." << endl;
+		return result;
+	}
+	TopTools_IndexedMapOfShape restoredFaces;
+	TopExp::MapShapes(restored, TopAbs_FACE, restoredFaces);
+	cout << "The splits of " << tools.Extent() << " edges the defeaturing joined were restored: "
+		 << restoredFaces.Extent() - resultFaces.Extent() << " faces." << endl;
+	return restored;
+}
 // The face ids are the order Netgen uses when it builds its face map from a loaded solid.
 // Read the BREP ourselves so the faces given to OCCT belong to the shape being defeatured.
 bool DefeatureBrep(int argc, char* argv[])
@@ -1079,6 +1225,7 @@ bool DefeatureBrep(int argc, char* argv[])
 		BRepAlgoAPI_Defeaturing defeaturing;
 		defeaturing.SetShape(inputShape);
 		defeaturing.SetRunParallel(false);
+		defeaturing.SetToFillHistory(true);
 		for (int faceId : selectedFaceIds) defeaturing.AddFaceToRemove(faces(faceId));
 		defeaturing.Build();
 		if (!defeaturing.IsDone())
@@ -1094,6 +1241,7 @@ bool DefeatureBrep(int argc, char* argv[])
 			cerr << "Defeaturing returned no shape." << endl;
 			return 1;
 		}
+		result = RestoreMergedFaces(inputShape, defeaturing, result);
 		TopTools_IndexedMapOfShape resultFaces;
 		TopTools_IndexedMapOfShape resultSolids;
 		TopExp::MapShapes(result, TopAbs_FACE, resultFaces);
@@ -2089,14 +2237,15 @@ bool DefeatureCompoundBrep(int argc, char* argv[])
 			cerr << "Defeaturing did not return a valid compound of solids." << endl;
 			return 1;
 		}
+		TopoDS_Shape restored = RestoreMergedFaces(inputShape, defeaturing, ordered);
 		TopTools_IndexedMapOfShape resultFaces;
-		TopExp::MapShapes(ordered, TopAbs_FACE, resultFaces);
+		TopExp::MapShapes(restored, TopAbs_FACE, resultFaces);
 		if (resultFaces.Extent() >= faces.Extent())
 		{
 			cerr << "No face was removed from the geometry." << endl;
 			return 1;
 		}
-		if (!BRepTools::Write(ordered, argv[3]))
+		if (!BRepTools::Write(restored, argv[3]))
 		{
 			cerr << "Error writing BREP file: " << argv[3] << endl;
 			return 1;

@@ -65,6 +65,16 @@ history of the defeaturing and written back in the order it was read, which is t
 sub parts of the compound in; a solid the defeaturing removed or split is refused. PrePoMax runs it for
 Defeature on the sub parts and split cells of a compound.
 
+Both defeaturing commands keep the splits of the faces they do not remove. `BRepAlgoAPI_Defeaturing` simplifies
+its result by making every two neighbouring faces on one surface one face, anywhere in the shape, so the two halves
+of a periodic face and the pieces of a face a shell split divided came back whole after the removal of something
+else - on `blind_holes.brep` split into halves, defeaturing one blind hole removed five faces instead of three. The
+edges that separated two input faces which came out as one face are found through the history and cut into the
+result again with `BRepAlgoAPI_Splitter`, the way a shell split cuts them, so every split comes back where it was,
+whoever made it. An edge that ended on a removed feature no longer reaches across its face and is left out with a
+warning, and the result is kept as the defeaturing made it when the cut would leave an edge inside a face or an
+invalid shape.
+
 `BREP_FUSE_FACES <in.brep> <out.brep> <numOfGroups> {<solid> <numOfFaces> <faceId> ...}` makes the named
 faces one, the ids grouped as `BREP_REMOVE_FACES` takes them. It is the heal `BREP_MERGE_SOLIDS` ends with, run
 on faces the caller names: an edge is taken out only when both of its faces are named and bound the same solids,
