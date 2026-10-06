@@ -2189,6 +2189,36 @@ namespace nglib
 		//
 		return newoccgeo;
 	}
+	// A vertex a CAD system wrote a hair past the seam of a periodic face - a mirrored part has had the vertices of
+	// its bores 2e-9 rad past it - is cut off by the divider as an edge shorter than any tolerance, and the faces
+	// that edge bounds are invalid. Moving the vertex onto the seam would reshape the pcurves, and recomputing them
+	// breaks the edges on the neighbouring faces. Dropping such edges after the split gives back the faces the
+	// divider meant, so it is done only to a result that is invalid.
+	void DropSmallEdgesOfInvalidShape(TopoDS_Shape& shape, const char* filename)
+	{
+		if (BRepCheck_Analyzer(shape).IsValid()) return;
+		try
+		{
+			ShapeFix_Wireframe fixer(shape);
+			fixer.SetPrecision(1e-6);
+			fixer.SetMaxTolerance(1e-4);
+			fixer.ModeDropSmallEdges() = Standard_True;
+			fixer.FixSmallEdges();
+			fixer.FixWireGaps();
+			TopoDS_Shape fixedShape = fixer.Shape();
+			if (BRepCheck_Analyzer(fixedShape).IsValid())
+			{
+				shape = fixedShape;
+				return;
+			}
+		}
+		catch (Standard_Failure& ex)
+		{
+			cout << endl << "WARNING: dropping the small edges of " << filename << " failed ("
+				 << typeid(ex).name() << ")." << endl;
+		}
+		cout << endl << "WARNING: the periodic face split of " << filename << " is not a valid shape." << endl;
+	}
 	bool WriteShapeToBrepFile(const TopoDS_Shape& shape, const char* filename, int numOfSplitFaces)
 	{
 		bool result = false;
@@ -2226,6 +2256,7 @@ namespace nglib
 						 << " periodic face split (" << typeid(ex).name() << ")."
 						 << " The geometry is written unrepaired and may be invalid." << endl;
 				}
+				DropSmallEdgesOfInvalidShape(splitShape, filename);
 			}
 		}
 		//
