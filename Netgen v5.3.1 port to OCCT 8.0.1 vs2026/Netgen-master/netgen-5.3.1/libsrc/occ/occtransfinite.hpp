@@ -55,7 +55,10 @@ namespace netgen
      follow, read from the transfinite file of the mesh parameters: the sides of
      every face as chains of edge map numbers in loop order, the number of
      segments the user set on an edge, and the names its messages use.  When
-     the file is given, Netgen detects no structured faces of its own.
+     the file is given, Netgen detects no structured faces of its own.  A
+     three-sided face is three blocks of quads around one inner node, or, with
+     a polar corner, the grid collapsed at that corner: polar_corners holds the
+     side that starts at it.
   */
   struct OCCGivenTransfiniteFaces
   {
@@ -64,6 +67,7 @@ namespace netgen
     std::map<int, std::string> face_names;
     std::map<int, std::string> edge_names;
     std::map<int, int> pinned_counts;
+    std::map<int, int> polar_corners;
   };
 
   OCCGivenTransfiniteFaces & GivenTransfiniteFaces();

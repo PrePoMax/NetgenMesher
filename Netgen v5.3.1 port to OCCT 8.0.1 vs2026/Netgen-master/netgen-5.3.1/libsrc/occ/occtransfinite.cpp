@@ -255,20 +255,24 @@ namespace netgen
 	// The structured grid of a face between the corners found on its boundary loop: corners[q] is the loop
 	// segment side q starts with.  Strict leaves out the checks that hand a face back to the advancing front -
 	// the triangle angle and the size - and keeps only the fold, giving the reason in failure.  With quads every
-	// grid cell is one quad, else two triangles.
+	// grid cell is one quad, else two triangles.  Three corners are a grid collapsed at the first of them: its
+	// left side is that corner alone, its rows take the spacing of the right side, and its cells there are
+	// triangles.
 	static bool BuildGridMesh(const OCCGeometry & geom, const Mesh & mesh, int facenr, const std::vector<Segment> & loop,
 		const std::vector<int> & corners, bool strict, bool check_size, bool quads, OCCTransfiniteFaceMesh & result,
 		std::string & failure)
 	{
 		const TopoDS_Face face = TopoDS::Face(geom.fmap(facenr));
 		const int nseg = int(loop.size());
+		const bool collapsed = corners.size() == 3;
+		const int ncorners = int(corners.size());
 
 		// The sides run along the loop from corner to corner.
 		TransfiniteSide sides[4];
-		for (int q = 0; q < 4; q++)
+		for (int q = 0; q < ncorners; q++)
 		{
 			const int first = corners[q];
-			const int count = (corners[(q + 1) % 4] - first + nseg) % nseg;
+			const int count = (corners[(q + 1) % ncorners] - first + nseg) % nseg;
 			TransfiniteSide & side = sides[q];
 
 			for (int c = 0; c < count; c++)
@@ -284,9 +288,17 @@ namespace netgen
 
 		const int n = int(sides[0].pnums.size()) - 1;
 		const int m = int(sides[1].pnums.size()) - 1;
+		if (collapsed)
+		{
+			// the left side is the collapsed corner, where the top side ends
+			const Segment & first = loop[corners[0]];
+			sides[3].pnums.assign(m + 1, first[0]);
+			sides[3].uv.assign(m + 1, Point<2>(first.epgeominfo[0].u, first.epgeominfo[0].v));
+		}
 		if (int(sides[2].pnums.size()) != n + 1 || int(sides[3].pnums.size()) != m + 1)
 		{
-			failure = "has opposite sides with different numbers of segments";
+			failure = collapsed ? "has its two sides at the collapsed corner with different numbers of segments" :
+				"has opposite sides with different numbers of segments";
 			return false;
 		}
 
@@ -301,12 +313,14 @@ namespace netgen
 		std::reverse(left.pnums.begin(), left.pnums.end());
 		std::reverse(left.uv.begin(), left.uv.end());
 
-		for (int q = 0; q < 4; q++)
+		for (int q = 0; q < ncorners; q++)
 			if (!ComputeArcLength(mesh, sides[q]))
 			{
 				failure = "has a side of no length";
 				return false;
 			}
+		if (collapsed)
+			left.s = right.s;
 
 		Box<2> uvbox(bottom.uv[0], bottom.uv[0]);
 		for (int q = 0; q < 4; q++)
@@ -394,10 +408,14 @@ namespace netgen
 				const int trigs[2][3] = {
 					{ k00, k10, diagonal_00 ? k11 : k01 },
 					{ diagonal_00 ? k00 : k10, k11, k01 } };
+				// a cell at the collapsed corner is the one triangle of its other three nodes
+				const bool fan = collapsed && i == 0;
+				const int fan_trig[3] = { k00, k10, k11 };
 
-				for (int t = 0; t < 2; t++)
+				for (int t = 0; t < (fan ? 1 : 2); t++)
 				{
-					const int a = trigs[t][0], b = trigs[t][1], c = trigs[t][2];
+					const int a = fan ? fan_trig[0] : trigs[t][0], b = fan ? fan_trig[1] : trigs[t][1],
+						c = fan ? fan_trig[2] : trigs[t][2];
 
 					// a grid folded over in the parameter space flips triangles
 					const Vec<2> ab = uv[b] - uv[a], ac = uv[c] - uv[a];
@@ -427,8 +445,23 @@ namespace netgen
 					}
 					result.elements.push_back(element);
 				}
-				if (!quads)
+				if (!quads || fan)
+				{
+					if (quads)
+					{
+						Element2d element(pnums[k00], pnums[k10], pnums[k11]);
+						element.SetIndex(facenr);
+						for (int v = 0; v < 3; v++)
+						{
+							PointGeomInfo & gi = element.GeomInfoPi(v + 1);
+							gi.trignum = facenr;
+							gi.u = uv[fan_trig[v]](0);
+							gi.v = uv[fan_trig[v]](1);
+						}
+						result.elements.push_back(element);
+					}
 					continue;
+				}
 				// The cell as one quad, turned as the triangles it was checked as
 				Element2d element(pnums[k00], pnums[k10], pnums[k11], pnums[k01]);
 				element.SetIndex(facenr);
@@ -534,7 +567,7 @@ namespace netgen
 
 	// The file PrePoMax writes:
 	//   faces <count>
-	//   face <face map number> <number of sides> <name>
+	//   face <face map number> <number of sides> [polar <side starting at the collapsed corner>] <name>
 	//   side <number of edges> <edge map numbers in loop order>      once for every side
 	//   edges <count>
 	//   edge <edge map number> <segments the user set, 0 for none> <name>
@@ -569,6 +602,17 @@ namespace netgen
 			{
 				int facenr = 0, numsides = 0;
 				stream >> facenr >> numsides;
+				const std::streampos after_sides = stream.tellg();
+				int polar = -1;
+				if (stream >> word && word == "polar")
+					stream >> polar;
+				else
+				{
+					stream.clear();
+					stream.seekg(after_sides);
+				}
+				if (numsides == 3 && polar >= 0 && polar < 3)
+					given.polar_corners[facenr] = polar;
 				given.face_names[facenr] = rest(stream);
 				std::vector<std::vector<int> > & sides = given.sides[facenr];
 				for (int q = 0; q < numsides && std::getline(file, line); q++)
@@ -635,6 +679,8 @@ namespace netgen
 		{
 			int facenr;
 			std::vector<int> a, b;
+			// the two sides meeting at the collapsed corner of a polar face
+			bool polar = false;
 		};
 		std::vector<SidePair> pairs;
 		// A three-sided face is three blocks of quads around one inner node, which needs an even sum on its sides
@@ -651,6 +697,25 @@ namespace netgen
 			if (it->second.size() != 3 && it->second.size() != 4)
 				throw NgException("Transfinite: " + GivenFaceName(it->first) + " has " +
 					std::to_string(it->second.size()) + " sides; structured faces have 3 or 4.");
+			std::map<int, int>::const_iterator polar = given.polar_corners.find(it->first);
+			if (it->second.size() == 3 && polar != given.polar_corners.end())
+			{
+				SidePair pair;
+				pair.facenr = it->first;
+				pair.polar = true;
+				for (int e : it->second[(polar->second + 2) % 3])
+				{
+					if (!valid(e)) throw NgException("Transfinite: " + GivenFaceName(it->first) + " names an edge it does not have.");
+					pair.a.push_back(e - 1);
+				}
+				for (int e : it->second[polar->second])
+				{
+					if (!valid(e)) throw NgException("Transfinite: " + GivenFaceName(it->first) + " names an edge it does not have.");
+					pair.b.push_back(e - 1);
+				}
+				pairs.push_back(pair);
+				continue;
+			}
 			if (it->second.size() == 3)
 			{
 				SideTriple triple;
@@ -898,8 +963,9 @@ namespace netgen
 			for (int e : pair.b) sum_b += counts[e];
 			if (sum_a == sum_b && !conflicting_classes.count(find(pair.a[0])))
 				continue;
-			message += "Transfinite: the opposite sides of " + GivenFaceName(pair.facenr) + " cannot be given the same "
-				"number of elements: " + describe(pair.a) + " against " + describe(pair.b) + ".\n";
+			message += "Transfinite: the " + std::string(pair.polar ? "two sides at the collapsed corner" : "opposite sides") +
+				" of " + GivenFaceName(pair.facenr) + " cannot be given the same number of elements: " + describe(pair.a) +
+				" against " + describe(pair.b) + ".\n";
 		}
 		for (const SideTriple & triple : triples)
 		{
@@ -1034,6 +1100,8 @@ namespace netgen
 		// A corner is where the loop passes from one side to the next
 		const int nseg = int(loop.size());
 		std::vector<int> corners;
+		std::map<int, int>::const_iterator polar = given.polar_corners.find(facenr);
+		int polar_corner = -1;
 		for (int k = 0; k < nseg; k++)
 		{
 			std::map<int, int>::const_iterator in = edge_side.find(loop[(k + nseg - 1) % nseg].epgeominfo[1].edgenr);
@@ -1042,12 +1110,30 @@ namespace netgen
 				throw NgException("Transfinite: the boundary of " + GivenFaceName(facenr) +
 					" runs along an edge none of its sides has.");
 			if (in->second != out->second)
+			{
+				// the collapsed corner joins the side starting there to the one before it, whichever way the loop runs
+				if (polar != given.polar_corners.end() && sides.size() == 3 &&
+					((in->second == (polar->second + 2) % 3 && out->second == polar->second) ||
+					 (in->second == polar->second && out->second == (polar->second + 2) % 3)))
+					polar_corner = int(corners.size());
 				corners.push_back(k);
+			}
 		}
 		if (corners.size() != sides.size())
 			throw NgException("Transfinite: the boundary of " + GivenFaceName(facenr) + " does not pass its " +
 				std::to_string(sides.size()) + " sides one after another.");
 
+		if (sides.size() == 3 && polar != given.polar_corners.end())
+		{
+			if (polar_corner < 0)
+				throw NgException("Transfinite: the collapsed corner of " + GivenFaceName(facenr) +
+					" is not on its boundary.");
+			std::rotate(corners.begin(), corners.begin() + polar_corner, corners.end());
+			std::string failure;
+			if (!BuildGridMesh(geom, mesh, facenr, loop, corners, true, false, quads, result, failure))
+				throw NgException("Transfinite: " + GivenFaceName(facenr) + " " + failure + ".");
+			return;
+		}
 		if (sides.size() == 3)
 		{
 			BuildThreeBlockFaceMesh(geom, mesh, facenr, loop, corners, quads, result);
