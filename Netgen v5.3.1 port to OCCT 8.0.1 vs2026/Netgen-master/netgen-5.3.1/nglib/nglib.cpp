@@ -1046,14 +1046,32 @@ namespace nglib
 			solid = TopoDS::Solid(parentSolids(1));
 			return true;
 		}
+		// A face bounds its solid from one side only when the solid always uses it the same way; a face used both
+		// ways has material on both of its sides
+		bool GetOrientationInSolid(const TopoDS_Face& face, const TopoDS_Solid& solid, TopAbs_Orientation& orientation)
+		{
+			bool found = false;
+			for (TopExp_Explorer explorer(solid, TopAbs_FACE); explorer.More(); explorer.Next())
+			{
+				if (!explorer.Current().IsSame(face)) continue;
+				TopAbs_Orientation current = explorer.Current().Orientation();
+				if (current != TopAbs_FORWARD && current != TopAbs_REVERSED) return false;
+				if (found && current != orientation) return false;
+				orientation = current;
+				found = true;
+			}
+			return found;
+		}
 		const char* CylinderConvexity(const TopoDS_Face& face, const BRepAdaptor_Surface& surface,
 		                                const gp_Cylinder& cylinder)
 		{
 			TopoDS_Solid solid;
 			if (!GetSingleParentSolid(face, solid)) return nullptr;
-			// Find a point inside the trimmed face, away from its boundary. Testing the containing
-			// solid on both radial sides states where the material really is and does not assume
-			// that Forward/Reversed alone has the same meaning for every transformed surface.
+			// Find a point inside the trimmed face, away from its boundary. The outward normal there points
+			// away from the material, which states on which radial side the material is. Classifying points
+			// against the whole solid states the same and costs tens of milliseconds a point on a solid with
+			// spline faces, so it is kept for a face with a mirroring location only: a mirror reverses the
+			// parametric normal of the transformed surface, and Forward/Reversed then means the opposite.
 			double uMin;
 			double uMax;
 			double vMin;
@@ -1063,6 +1081,8 @@ namespace nglib
 				Precision::IsInfinite(vMin) || Precision::IsInfinite(vMax)) return nullptr;
 			const double fractions[] = { 0.5, 0.25, 0.75, 0.125, 0.875 };
 			gp_Pnt point;
+			gp_Vec uDerivative;
+			gp_Vec vDerivative;
 			bool pointFound = false;
 			for (double uFraction : fractions)
 			{
@@ -1073,7 +1093,7 @@ namespace nglib
 					BRepClass_FaceClassifier classifier(face, gp_Pnt2d(u, v), Precision::Confusion());
 					if (classifier.State() == TopAbs_IN)
 					{
-						point = surface.Value(u, v);
+						surface.D1(u, v, point, uDerivative, vDerivative);
 						pointFound = true;
 						break;
 					}
@@ -1087,6 +1107,19 @@ namespace nglib
 			radial -= axis.Multiplied(radial.Dot(axis));
 			if (radial.SquareMagnitude() <= Precision::SquareConfusion()) return nullptr;
 			radial.Normalize();
+			if (!face.Location().Transformation().IsNegative())
+			{
+				TopAbs_Orientation orientation;
+				if (!GetOrientationInSolid(face, solid, orientation)) return nullptr;
+				gp_Vec normal = uDerivative.Crossed(vDerivative);
+				if (normal.SquareMagnitude() <= Precision::SquareConfusion()) return nullptr;
+				normal.Normalize();
+				if (orientation == TopAbs_REVERSED) normal.Reverse();
+				double radialComponent = normal.Dot(radial);
+				if (radialComponent > 0.5) return "Convex";
+				if (radialComponent < -0.5) return "Concave";
+				return nullptr;
+			}
 			double offset = std::max(100.0 * Precision::Confusion(), cylinder.Radius() * 1e-6);
 			BRepClass3d_SolidClassifier classifier(solid);
 			classifier.Perform(point.Translated(radial.Multiplied(-offset)), Precision::Confusion());
