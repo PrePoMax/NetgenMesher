@@ -2170,7 +2170,9 @@ namespace nglib
 			wireframeFix->SetMaxTolerance(tolerance);
 			wireframeFix->ModeDropSmallEdges() = Standard_True;
 			wireframeFix->FixSmallEdges();
-			wireframeFix->FixWireGaps();
+			// Closing the wire gaps of a valid shape can break it, and in place: on a split part with no gap it
+			// reoriented two faces no small edge touches and gave a shared vertex a tolerance of 70 mm
+			if (!BRepCheck_Analyzer(wireframeFix->Shape()).IsValid()) wireframeFix->FixWireGaps();
 			shape = wireframeFix->Shape();
 			WriteRepairStep("remove small edges", before, shape);
 		}

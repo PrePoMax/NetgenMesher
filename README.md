@@ -88,7 +88,8 @@ which is what faces on different surfaces give. PrePoMax runs it for Fuse Faces.
 `BREP_REPAIR <in.brep> <out.brep> <options> <tolerance>` repairs the whole shape. `<options>` adds up 8 sew
 faces (`BRepBuilderAPI_Sewing`, only for a shape without solids), 1 fix shape (`ShapeFix_Shape`, the
 tolerance its maximum), 4 remove small faces (`ShapeFix_FixSmallFace`), 2 remove small edges
-(`ShapeFix_Wireframe`), 16 fuse faces (the `BREP_FUSE_FACES` heal on every face) and 32 join edges
+(`ShapeFix_Wireframe`, whose wire gaps are closed only when removing the edges left the shape invalid - on a
+valid shape closing them reorients faces far from any small edge), 16 fuse faces (the `BREP_FUSE_FACES` heal on every face) and 32 join edges
 (`ShapeUpgrade_UnifySameDomain` on edges), and they run in that order. Each step writes the faces, edges and
 vertices it left. A result with another number of solids, or one that is not valid when the input was, is
 refused. PrePoMax runs it for Repair.
