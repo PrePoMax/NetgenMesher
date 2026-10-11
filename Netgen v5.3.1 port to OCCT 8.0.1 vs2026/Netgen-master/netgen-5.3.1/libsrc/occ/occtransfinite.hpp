@@ -80,12 +80,17 @@ namespace netgen
      the one the user set on one of them or the lowest the mesh size asks for;
      sides that are chains of edges are balanced over these by lowering the
      larger side at its most refined edge, and a side is raised only where the
-     other cannot be lowered.  Pinned counts are never changed.  counts and own
-     are indexed by edge map number - 1, own holding the counts the mesh size
-     asks for.  Throws when the sides cannot be balanced, naming the faces and
-     their edges.
+     other cannot be lowered.  Lowering evens out counts that are close: an
+     edge that borders a free face, one not given, keeps at least 0.8 of its
+     own count, and the edges it is balanced with are raised to it instead,
+     unless the numbers the user set leave no room for that.  Pinned counts
+     are never changed.  counts, own and borders_free_face are indexed by
+     edge map number - 1, own holding the counts the mesh size asks for.
+     Throws when the sides cannot be balanced, naming the faces and their
+     edges.
   */
-  void BalanceGivenTransfiniteEdgeCounts(const std::vector<int> & own, std::vector<int> & counts);
+  void BalanceGivenTransfiniteEdgeCounts(const std::vector<int> & own, const std::vector<char> & borders_free_face,
+                                         std::vector<int> & counts);
 
   /**
      Meshes a given face as a structured grid between the corners its sides

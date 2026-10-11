@@ -671,7 +671,17 @@ namespace netgen
 			for (int i = 0; i < nedges; i++)
 				own[i] = edge_results[i].skip ? 1 : int(edge_results[i].points.Size()) + 1;
 			counts = own;
-			BalanceGivenTransfiniteEdgeCounts(own, counts);
+			std::vector<char> borders_free_face(nedges, 0);
+			for (int facenr = 1; facenr <= geom.fmap.Extent(); facenr++)
+			{
+				if (GivenTransfiniteFaces().sides.count(facenr)) continue;
+				for (TopExp_Explorer exp(geom.fmap(facenr), TopAbs_EDGE); exp.More(); exp.Next())
+				{
+					const int edgenr = geom.emap.FindIndex(exp.Current());
+					if (edgenr >= 1 && edgenr <= nedges) borders_free_face[edgenr - 1] = 1;
+				}
+			}
+			BalanceGivenTransfiniteEdgeCounts(own, borders_free_face, counts);
 
 			std::vector<int> redivide;
 			for (int i = 0; i < nedges; i++)

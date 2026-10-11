@@ -144,6 +144,11 @@ more than about twice as fine as its mesh size asks for. A face that cannot be b
 dropped and the rest are balanced again from the counts the mesh size asks for, so no edge is refined
 for a face that is not going to be structured. The edges are then divided into their counts, spaced
 as the local mesh size would space them.
+With `transfinite_filename` the structured faces are the ones PrePoMax gives and none are detected.
+Opposite sides are balanced to the coarser count where the counts are close: an edge that borders a face
+not given keeps at least 0.8 of the count its mesh size asks for, since the free mesh beside it is made
+to that size, and the edges it is balanced with are raised to it instead. The numbers of elements the
+file pins are never changed; when they leave no room for those lowest counts, the counts give way.
 
 A face may carry edges that do not bound it: an INTERNAL edge is a line lying on the face that does not
 cut it through - where a non-manifold shell has another face meeting it along a line that stops inside

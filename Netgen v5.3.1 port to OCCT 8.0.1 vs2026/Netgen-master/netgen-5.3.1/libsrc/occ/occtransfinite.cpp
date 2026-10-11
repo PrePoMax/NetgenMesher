@@ -10,6 +10,7 @@
 #include <BRepAdaptor_Curve.hxx>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <map>
 #include <numeric>
@@ -661,7 +662,38 @@ namespace netgen
 	}
 
 
-	void BalanceGivenTransfiniteEdgeCounts(const std::vector<int> & own, std::vector<int> & counts)
+	// An edge beside a free face is lowered only to close below the count the mesh size asks for: the free mesh
+	// next to it is made to that size, and a side lowered far below it leaves the free mesh segments it cannot fill
+	static const double transfinite_free_face_lowest_share = 0.8;
+
+	// The balance with no class lowered below the largest lowest count of its edges; returns the message naming the
+	// sides left unequal, empty when every side is balanced
+	static std::string BalanceGivenCounts(const std::vector<int> & own, const std::vector<int> & lowest,
+		std::vector<int> & counts);
+
+	void BalanceGivenTransfiniteEdgeCounts(const std::vector<int> & own, const std::vector<char> & borders_free_face,
+		std::vector<int> & counts)
+	{
+		const int nedges = int(counts.size());
+		std::vector<int> lowest(nedges, 1);
+		for (int i = 0; i < nedges; i++)
+			if (borders_free_face[i])
+				lowest[i] = std::max(1, int(std::ceil(transfinite_free_face_lowest_share * own[i] - 1e-9)));
+		std::vector<int> balanced = counts;
+		if (BalanceGivenCounts(own, lowest, balanced).empty())
+		{
+			counts = balanced;
+			return;
+		}
+		// The numbers the user set leave no room for the lowest counts, so they give way
+		const std::string message = BalanceGivenCounts(own, std::vector<int>(nedges, 1), counts);
+		if (!message.empty())
+			throw NgException(message + "Change the number of elements set on these edges, or switch off the "
+				"transfinite meshing of the 3-sided and 4-sided surfaces.");
+	}
+
+	static std::string BalanceGivenCounts(const std::vector<int> & own, const std::vector<int> & lowest,
+		std::vector<int> & counts)
 	{
 		const OCCGivenTransfiniteFaces & given = GivenTransfiniteFaces();
 		const int nedges = int(counts.size());
@@ -778,11 +810,14 @@ namespace netgen
 				floor_value[root] = 1;
 			}
 			value[root] = std::min(value[root], n);
+			floor_value[root] = std::max(floor_value[root], lowest[i]);
 			natural[root] += n;
 			natural_count[root]++;
 			if (pinned.count(i))
 				pinned_values[root].insert(counts[i]);
 		}
+		for (std::map<int, int>::iterator it = value.begin(); it != value.end(); ++it)
+			it->second = std::max(it->second, floor_value[it->first]);
 		for (std::map<int, double>::iterator it = natural.begin(); it != natural.end(); ++it)
 			it->second /= natural_count[it->first];
 		for (std::map<int, std::set<int> >::const_iterator it = pinned_values.begin(); it != pinned_values.end(); ++it)
@@ -978,9 +1013,7 @@ namespace netgen
 				"of elements three blocks of quads fill - an even sum, with no side carrying as many as the other two: " +
 				describe(triple.sides[0]) + "; " + describe(triple.sides[1]) + "; " + describe(triple.sides[2]) + ".\n";
 		}
-		if (!message.empty())
-			throw NgException(message + "Change the number of elements set on these edges, or switch off the "
-				"transfinite meshing of the 3-sided and 4-sided surfaces.");
+		return message;
 	}
 
 

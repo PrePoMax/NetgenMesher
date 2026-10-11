@@ -1229,7 +1229,10 @@ void MeshOptimize3d :: SwapImprove (Mesh & mesh, OPTIMIZEGOAL goal,
 	      tetused = 0;
 	      tetused[0] = 1;
 
-	      for (int l = 2; l < nsuround; l++)
+	      // A ring of elements around the edge that does not close would leave points of it unset, so the edge is
+	      // not swapped
+	      bool ringclosed = true;
+	      for (int l = 2; l < nsuround && ringclosed; l++)
 		{
 		  int oldpi = suroundpts[l-1];
 		  int newpi = 0;
@@ -1246,13 +1249,15 @@ void MeshOptimize3d :: SwapImprove (Mesh & mesh, OPTIMIZEGOAL goal,
 				nel[0] + nel[1] + nel[2] + nel[3] 
 				- pi1 - pi2 - oldpi;
 			      
-			      tetused[k] = 1; 
+			      tetused[k] = 1;
 			      suroundpts[l] = newpi;
-			    }			
+			    }
 		      }
+		  if (!newpi) ringclosed = false;
 		}
+	      if (!ringclosed) continue;
 
-	      
+
 	      bad1 = 0;
 	      for (int k = 0; k < nsuround; k++)
 		{
