@@ -119,8 +119,9 @@ namespace nglib
 	{
 		mycout = &cout;
 		myerr = &cerr;
-		// netgen::testout->SetOutStream (new ofstream ("test.out"));
-		testout = new ofstream("test.out");
+		// testout is Netgen's debug log and stays the null stream it starts as: written to test.out in the
+		// working folder, a volume mesh whose advancing front cannot close logged every rule it tried there,
+		// some 7 MB a second for as long as the run lasted
 	}
 
 

@@ -7,6 +7,7 @@
 #include "occparallel.hpp"
 #include "occtransfinite.hpp"
 
+#include <algorithm>
 #include <vector>
 
 
@@ -1529,9 +1530,47 @@ namespace netgen
 	}
 
 
-	static void ExtractFaceResult(const Mesh & scratch, int boundary_point_count,
+	// A scratch mesh starts with every point of the source mesh, so those points keep their numbers. The
+	// optimisation of a face with quadrilaterals compresses the mesh it works on, which drops the points the face
+	// does not use and keeps the order of the rest: its boundary then comes first, in the order of the numbers
+	// of the source mesh. Read as numbered like the source mesh, the elements of every face but the first joined
+	// points of other faces. Such a mesh is compressed once more after the optimisation, which changes nothing
+	// when the optimisation compressed it already, and the numbers of its first points are returned
+	static std::vector<int> GetSourcePointNumbers(const Mesh & source, Mesh & scratch, int facenr, bool quad)
+	{
+		std::vector<int> source_points;
+		if (!quad)
+		{
+			for (int i = 1; i <= source.GetNP(); i++)
+				source_points.push_back(i);
+			return source_points;
+		}
+
+		for (int i = 1; i <= source.GetNSeg(); i++)
+		{
+			const Segment & seg = source.LineSegment(i);
+			if (seg.si != facenr)
+				continue;
+			source_points.push_back(seg[0]);
+			source_points.push_back(seg[1]);
+		}
+		std::sort(source_points.begin(), source_points.end());
+		source_points.erase(std::unique(source_points.begin(), source_points.end()), source_points.end());
+
+		scratch.Compress();
+		if (scratch.GetNP() < int(source_points.size()))
+			throw NgException("The surface mesh of a face lost points of its boundary");
+		for (size_t i = 0; i < source_points.size(); i++)
+			if (Dist2(scratch.Point(int(i) + 1), source.Point(source_points[i])) != 0)
+				throw NgException("The surface mesh of a face lost points of its boundary");
+		return source_points;
+	}
+
+
+	static void ExtractFaceResult(const Mesh & scratch, const std::vector<int> & source_points,
 		int facenr, OCCFaceMeshResult & result)
 	{
+		const int boundary_point_count = int(source_points.size());
 		std::vector<int> point_map(scratch.GetNP() + 1, 0);
 
 		for (int i = 1; i <= scratch.GetNSE(); i++)
@@ -1545,7 +1584,10 @@ namespace netgen
 			{
 				int pi = element.PNum(j);
 				if (pi <= boundary_point_count)
+				{
+					element.PNum(j) = source_points[pi - 1];
 					continue;
+				}
 
 				if (point_map[pi] == 0)
 				{
@@ -1640,7 +1682,8 @@ namespace netgen
 			if (perfstepsend >= MESHCONST_OPTSURFACE)
 				OptimizeFaceScratchMesh(geom, scratch, facenr, face_mp);
 
-			ExtractFaceResult(scratch, source.GetNP(), facenr, result);
+			std::vector<int> source_points = GetSourcePointNumbers(source, scratch, facenr, face_mp.quad != 0);
+			ExtractFaceResult(scratch, source_points, facenr, result);
 			for (int i = 0; i < accumulated_restrictions.Size(); i++)
 				result.restrictions.push_back(accumulated_restrictions[i]);
 			result.projection_type = projection_type;
