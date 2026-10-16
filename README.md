@@ -216,6 +216,16 @@ tetrahedra; limited to sharp corners between quadrilaterals the other fills come
 CAD properties before a separate tessellation section. The extensible line format is documented in
 [VIS_GEOMETRY_METADATA.md](VIS_GEOMETRY_METADATA.md).
 
+BRepMesh triangulates a face only in part when the polylines of its edges cross in the parameter space of the face.
+A relative deflection divides an edge for its own length, so the long curved edges of a thin face sag across its
+width; on one face 0.3 wide along a 49 long edge, 5 triangles covered 6 % of it.
+`BuildVisualizationMesh` finds such a face by triangulation nodes no triangle uses, and confirms it by triangles
+covering less than half of its area. It then meshes again with a quarter of the deflection on the edges of that face, up to
+three times, through an edge discretizer in the BRepMesh context. Only the faces of the edges divided differently are
+meshed again, and the edges are shared in the discrete model, so the triangulations stay conforming and the rest
+of the mesh does not change. A face that one refinement did not help gets its edges divided as before again, so its
+neighbours are not meshed finer for nothing. A face still covered less than half is named in a warning.
+
 ## Building
 
 Both solutions build **x64**, and nglib must be built first because the front end links `nglib.lib`:

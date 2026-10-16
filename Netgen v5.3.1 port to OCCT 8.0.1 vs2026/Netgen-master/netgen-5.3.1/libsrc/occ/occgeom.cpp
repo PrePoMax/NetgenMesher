@@ -21,6 +21,14 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepGProp_Face.hxx>
 #include <BRepAlgo_NormalProjection.hxx>
+#include <BRepMesh_Context.hxx>
+#include <BRepMesh_EdgeDiscret.hxx>
+#include <IMeshData_Edge.hxx>
+#include <IMeshData_Model.hxx>
+#include <IMeshData_PCurve.hxx>
+#include <IMeshTools_CurveTessellator.hxx>
+#include <IMeshTools_ModelAlgo.hxx>
+#include <TopTools_DataMapOfShapeReal.hxx>
 
 #include <TCollection_ExtendedString.hxx>
 //By Maxx
@@ -2570,9 +2578,103 @@ namespace netgen
 		BuildVisualizationMesh(deflection, true, 0.5);
 	}
 	
+	// Discretizes the edges as BRepMesh does, then discretizes again, with the deflections scaled by the given
+	// factor, every given edge. The edges are shared by the faces in the discrete model, so every face of such an
+	// edge is meshed against the same finer polyline and the triangulations stay conforming. The other edges keep
+	// the polylines the faces that are not meshed again already have.
+	class RefiningEdgeDiscret : public IMeshTools_ModelAlgo
+	{
+	public:
+		RefiningEdgeDiscret(const TopTools_DataMapOfShapeReal& edgeFactors, const TopTools_MapOfShape& edgesToDivide)
+			: edgeFactors(edgeFactors), edgesToDivide(edgesToDivide) {}
+
+	protected:
+		bool performInternal(const Handle(IMeshData_Model)& model, const IMeshTools_Parameters& parameters,
+							 const Message_ProgressRange& range) override
+		{
+			Handle(BRepMesh_EdgeDiscret) edgeDiscret = new BRepMesh_EdgeDiscret();
+			if (!edgeDiscret->Perform(model, parameters, range)) return false;
+			//
+			for (int i = 0; i < model->EdgesNb(); i++)
+			{
+				const IMeshData::IEdgeHandle& dEdge = model->GetEdge(i);
+				const double* factor = edgeFactors.Seek(dEdge->GetEdge());
+				if (factor == nullptr || !edgesToDivide.Contains(dEdge->GetEdge()) || dEdge->GetDegenerated() ||
+					dEdge->IsFree()) continue;
+				//
+				dEdge->SetDeflection(dEdge->GetDeflection() * *factor);
+				dEdge->SetAngularDeflection(dEdge->GetAngularDeflection() * sqrt(*factor));
+				IMeshTools_Parameters edgeParameters = parameters;
+				edgeParameters.Relative = false;
+				edgeParameters.Deflection = dEdge->GetDeflection();
+				edgeParameters.Angle = dEdge->GetAngularDeflection();
+				//
+				const IMeshData::IPCurveHandle& pCurve = dEdge->GetPCurve(0);
+				Handle(IMeshTools_CurveTessellator) tessellator =
+					BRepMesh_EdgeDiscret::CreateEdgeTessellator(dEdge, pCurve->GetOrientation(), pCurve->GetFace(),
+																edgeParameters);
+				if (tessellator.IsNull()) continue;
+				dEdge->Clear(false);
+				BRepMesh_EdgeDiscret::Tessellate3d(dEdge, tessellator, true);
+				BRepMesh_EdgeDiscret::Tessellate2d(dEdge, true);
+			}
+			return true;
+		}
+
+	private:
+		TopTools_DataMapOfShapeReal edgeFactors;
+		TopTools_MapOfShape edgesToDivide;
+	};
+
+	// BRepMesh leaves a face triangulated in part when the polylines of its edges cross in the parameter space of
+	// the face - a thin face along long curved edges, discretized for their length rather than the width of the
+	// face. The triangles then cover a small part of the face, while a coarse but whole triangulation of a curved
+	// face is off its area by a fraction only.
+	// The nodes on the edges past the crossing belong to no triangle, which is quick to find, so the area of the
+	// face is computed only then.
+	static double GetTriangulatedAreaFraction(const TopoDS_Face& face, TopTools_DataMapOfShapeReal& faceAreas)
+	{
+		TopLoc_Location location;
+		Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, location);
+		if (triangulation.IsNull() || triangulation->NbTriangles() == 0) return 0;
+		//
+		std::vector<bool> usedNodes(triangulation->NbNodes() + 1, false);
+		Standard_Integer n1, n2, n3;
+		for (Standard_Integer i = 1; i <= triangulation->NbTriangles(); i++)
+		{
+			triangulation->Triangle(i).Get(n1, n2, n3);
+			usedNodes[n1] = true;
+			usedNodes[n2] = true;
+			usedNodes[n3] = true;
+		}
+		if (std::find(usedNodes.begin() + 1, usedNodes.end(), false) == usedNodes.end()) return 1;
+		//
+		const double* cachedArea = faceAreas.Seek(face);
+		double faceArea;
+		if (cachedArea != nullptr) faceArea = *cachedArea;
+		else
+		{
+			GProp_GProps properties;
+			BRepGProp::SurfaceProperties(face, properties);
+			faceArea = properties.Mass();
+			faceAreas.Bind(face, faceArea);
+		}
+		if (faceArea <= 0) return 1;
+		//
+		double triangulationArea = 0;
+		for (Standard_Integer i = 1; i <= triangulation->NbTriangles(); i++)
+		{
+			triangulation->Triangle(i).Get(n1, n2, n3);
+			gp_Vec v1(triangulation->Node(n1), triangulation->Node(n2));
+			gp_Vec v2(triangulation->Node(n1), triangulation->Node(n3));
+			triangulationArea += 0.5 * v1.Crossed(v2).Magnitude();
+		}
+		return triangulationArea / faceArea;
+	}
+
 	void OCCGeometry::BuildVisualizationMesh(double linearDeflection, bool relative, double angularDeflection)
 	{
-		cout << "Preparing visualization (linear deflection = " << linearDeflection << 
+		cout << "Preparing visualization (linear deflection = " << linearDeflection <<
 				", relative = " << std::boolalpha << relative <<
 				", angular deflection = " << angularDeflection << ") ... " << flush;
 
@@ -2580,6 +2682,133 @@ namespace netgen
 		//BRepMesh_IncrementalMesh(shape, deflection, true);
 		BRepMesh_IncrementalMesh(shape, linearDeflection, relative, angularDeflection, true);	// parallel
 		cout << "done" << endl;
+		// Mesh again with the edges of every face triangulated in part divided finer, until its edge polylines
+		// no longer cross. The other edges are divided as before, so the rest of the mesh does not change. A face
+		// whose triangles cover no more of it after a refinement is not helped by one, and its edges are divided as
+		// before again, so its neighbours are not meshed finer for nothing.
+		const int maxRefinements = 3;
+		const double minPartialFraction = 0.5;
+		const double refinementFactor = 0.25;
+		NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher> faceLevels;
+		TopTools_DataMapOfShapeReal faceFractions;
+		TopTools_MapOfShape hopelessFaces;
+		TopTools_DataMapOfShapeReal appliedEdgeFactors;
+		TopTools_DataMapOfShapeReal faceAreas;
+		TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+		TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+		stringstream faceIds;
+		for (int refinement = 0; refinement <= maxRefinements; refinement++)
+		{
+			bool changed = false;
+			faceIds.str("");
+			stringstream refinedFaceIds;
+			TopTools_MapOfShape faces;
+			for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next())
+			{
+				TopoDS_Face face = TopoDS::Face(exp.Current());
+				if (!faces.Add(face)) continue;
+				double fraction = GetTriangulatedAreaFraction(face, faceAreas);
+				if (fraction >= minPartialFraction) continue;
+				faceIds << " " << fmap.FindIndex(face);
+				if (hopelessFaces.Contains(face)) continue;
+				//
+				const double* previousFraction = faceFractions.Seek(face);
+				if (previousFraction != nullptr && fraction <= *previousFraction + 0.01)
+				{
+					hopelessFaces.Add(face);
+					faceLevels.UnBind(face);
+					changed = true;
+				}
+				else if (refinement < maxRefinements)
+				{
+					faceFractions.Bind(face, fraction);
+					int* level = faceLevels.ChangeSeek(face);
+					if (level != nullptr) (*level)++;
+					else faceLevels.Bind(face, 1);
+					refinedFaceIds << " " << fmap.FindIndex(face);
+					changed = true;
+				}
+			}
+			if (!changed) break;
+			//
+			TopTools_DataMapOfShapeReal edgeFactors;
+			for (NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher>::Iterator it(faceLevels);
+				 it.More(); it.Next())
+			{
+				double faceFactor = pow(refinementFactor, it.Value());
+				for (TopExp_Explorer expEdge(it.Key(), TopAbs_EDGE); expEdge.More(); expEdge.Next())
+				{
+					const TopoDS_Shape& edge = expEdge.Current();
+					if (BRep_Tool::Degenerated(TopoDS::Edge(edge))) continue;
+					double* factor = edgeFactors.ChangeSeek(edge);
+					if (factor == nullptr) edgeFactors.Bind(edge, faceFactor);
+					else if (faceFactor < *factor) *factor = faceFactor;
+				}
+			}
+			//
+			// Only the faces of the edges divided differently than in the last meshing are meshed again
+			TopTools_MapOfShape changedEdges;
+			for (TopTools_DataMapOfShapeReal::Iterator it(edgeFactors); it.More(); it.Next())
+			{
+				const double* appliedFactor = appliedEdgeFactors.Seek(it.Key());
+				if (appliedFactor == nullptr || *appliedFactor != it.Value()) changedEdges.Add(it.Key());
+			}
+			for (TopTools_DataMapOfShapeReal::Iterator it(appliedEdgeFactors); it.More(); it.Next())
+			{
+				if (!edgeFactors.IsBound(it.Key())) changedEdges.Add(it.Key());
+			}
+			TopTools_MapOfShape facesToMesh;
+			for (TopTools_MapOfShape::Iterator it(changedEdges); it.More(); it.Next())
+			{
+				for (TopTools_ListOfShape::Iterator itFace(edgeFaces.FindFromKey(it.Key())); itFace.More(); itFace.Next())
+					facesToMesh.Add(itFace.Value());
+			}
+			// An edge keeps its finer polyline from a face that is not meshed again, and is divided again only when
+			// all of its faces are
+			TopTools_MapOfShape edgesToDivide;
+			for (TopTools_DataMapOfShapeReal::Iterator it(edgeFactors); it.More(); it.Next())
+			{
+				bool allFacesToMesh = true;
+				for (TopTools_ListOfShape::Iterator itFace(edgeFaces.FindFromKey(it.Key())); itFace.More(); itFace.Next())
+				{
+					if (!facesToMesh.Contains(itFace.Value())) allFacesToMesh = false;
+				}
+				if (allFacesToMesh) edgesToDivide.Add(it.Key());
+			}
+			appliedEdgeFactors = edgeFactors;
+			//
+			if (refinedFaceIds.str().empty())
+				cout << "Dividing the edges of the face(s) a refinement did not help as before ... " << flush;
+			else
+				cout << "Dividing the edges of the face(s) triangulated in part finer:" << refinedFaceIds.str() << " ... "
+					 << flush;
+			BRep_Builder builder;
+			for (TopTools_MapOfShape::Iterator it(facesToMesh); it.More(); it.Next())
+				builder.UpdateFace(TopoDS::Face(it.Value()), Handle(Poly_Triangulation)());
+			BRepMesh_IncrementalMesh mesher;
+			mesher.SetShape(shape);
+			mesher.ChangeParameters().Deflection = linearDeflection;
+			mesher.ChangeParameters().Angle = angularDeflection;
+			mesher.ChangeParameters().Relative = relative;
+			mesher.ChangeParameters().InParallel = true;
+			Handle(BRepMesh_Context) context = new BRepMesh_Context();
+			context->SetEdgeDiscret(new RefiningEdgeDiscret(edgeFactors, edgesToDivide));
+			mesher.Perform(context);
+			cout << "done" << endl;
+		}
+		if (!faceLevels.IsEmpty() || !hopelessFaces.IsEmpty())
+		{
+			faceIds.str("");
+			TopTools_MapOfShape faces;
+			for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next())
+			{
+				TopoDS_Face face = TopoDS::Face(exp.Current());
+				if (faces.Add(face) && GetTriangulatedAreaFraction(face, faceAreas) < minPartialFraction)
+					faceIds << " " << fmap.FindIndex(face);
+			}
+			if (!faceIds.str().empty())
+				cout << "WARNING: face(s)" << faceIds.str() << " are still triangulated only in part." << endl;
+		}
 	}
 
 	void OCCGeometry::CalcBoundingBox()
