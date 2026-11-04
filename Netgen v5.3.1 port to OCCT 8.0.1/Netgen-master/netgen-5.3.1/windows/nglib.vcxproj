@@ -42,14 +42,14 @@
     <_ProjectFileVersion>11.0.61030.0</_ProjectFileVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug(OCC)|x64'">
-    <OutDir>C:\Pc\Programiranje\NetgenMesher\NetgenMesher\Debug\</OutDir>
+    <OutDir>$(SolutionDir)..\..\..\..\NetgenMesher\Debug\</OutDir>
     <IntDir>$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
     <LinkIncremental>true</LinkIncremental>
     <IncludePath>$(SolutionDir)..\..\..\opencascade-8.0.1\inc;$(SolutionDir)..\..\..\pthreads-win32_prebuilt-dll-2-9-1-release\include;$(SolutionDir)..\..\..\zlib_win64\include;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)..\..\..\opencascade-8.0.1\lib;$(SolutionDir)..\..\..\pthreads-win32_prebuilt-dll-2-9-1-release\lib\x64;$(SolutionDir)..\..\..\zlib_win64\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release(OCC)|x64'">
-    <OutDir>C:\Pc\Programiranje\NetgenMesher\NetgenMesher\Release\</OutDir>
+    <OutDir>$(SolutionDir)..\..\..\..\NetgenMesher\Release\</OutDir>
     <IntDir>$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
     <ExtensionsToDeleteOnClean>*.obj%3b*.ilk%3b*.tlb%3b*.tli%3b*.tlh%3b*.tmp%3b*.rsp%3b*.pgc%3b*.pgd%3b*.meta%3b$(TargetPath)</ExtensionsToDeleteOnClean>
     <IncludePath>$(SolutionDir)..\..\..\opencascade-8.0.1\inc;$(SolutionDir)..\..\..\pthreads-win32_prebuilt-dll-2-9-1-release\include;$(SolutionDir)..\..\..\zlib_win64\include;$(IncludePath)</IncludePath>

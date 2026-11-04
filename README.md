@@ -10,8 +10,8 @@ which is also where its licence texts and dll inventory are documented.
 
 | Folder | What it is |
 |---|---|
-| `Netgen v5.3.1 port to OCCT 8.0.1 vs2026/` | Netgen 5.3.1 ported to OpenCASCADE 8.0.1. `Netgen-master/netgen-5.3.1/nglib/nglib.cpp` holds the PrePoMax specific entry points; `windows/nglib.sln` builds `nglib.dll`. |
-| `NetGenMesher 8.0.1 vs2026/` | `NetGenLibTest/NetGenLibTest.cpp` is the command line front end - it parses the command (`STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS`, `BREP_VISUALIZATION`, `BREP_MESH`, ...) and calls into nglib. `NetGenLibTest.sln` builds `NetGenMesher.exe`. |
+| `Netgen v5.3.1 port to OCCT 8.0.1/` | Netgen 5.3.1 ported to OpenCASCADE 8.0.1. `Netgen-master/netgen-5.3.1/nglib/nglib.cpp` holds the PrePoMax specific entry points; `windows/nglib.sln` builds `nglib.dll`. |
+| `NetGenMesher 8.0.1/` | `NetGenLibTest/NetGenLibTest.cpp` is the command line front end - it parses the command (`STEP_ASSEMBLY_SPLIT_TO_COMPOUNDS`, `BREP_VISUALIZATION`, `BREP_MESH`, ...) and calls into nglib. `NetGenLibTest.sln` builds `NetGenMesher.exe`. |
 | `NetgenMesher/` | Build output. `Release` is the configuration PrePoMax ships. |
 | `redist/` | Visual C++ runtime dlls copied next to the output by `copy_runtime_dlls.bat`. |
 
@@ -230,8 +230,8 @@ neighbours are not meshed finer for nothing. A face still covered less than half
 
 Both solutions build **x64**, and nglib must be built first because the front end links `nglib.lib`:
 
-    MSBuild "Netgen v5.3.1 port to OCCT 8.0.1 vs2026\Netgen-master\netgen-5.3.1\windows\nglib.sln" -t:Build "-p:Configuration=Release(OCC)" -p:Platform=x64
-    MSBuild "NetGenMesher 8.0.1 vs2026\NetGenLibTest.sln" -t:Build -p:Configuration=Release -p:Platform=x64
+    MSBuild "Netgen v5.3.1 port to OCCT 8.0.1\Netgen-master\netgen-5.3.1\windows\nglib.sln" -t:Build "-p:Configuration=Release(OCC)" -p:Platform=x64
+    MSBuild "NetGenMesher 8.0.1\NetGenLibTest.sln" -t:Build -p:Configuration=Release -p:Platform=x64
 
 Both write to `NetgenMesher\Release`. The nglib post build event syncs the OpenCASCADE, runtime,
 pthreads and zlib dlls next to them, so that folder is the complete runtime set.

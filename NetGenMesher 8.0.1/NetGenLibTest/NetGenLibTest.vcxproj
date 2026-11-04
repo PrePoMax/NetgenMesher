@@ -43,16 +43,16 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <IncludePath>$(SolutionDir)\opencascade-8.0.1\inc;$(SolutionDir)\nglib\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(SolutionDir)\opencascade-8.0.1\lib;C:\Pc\Programiranje\NetgenMesher\Netgen v5.3.1 port to OCCT 8.0.1 vs2026\Netgen-master\netgen-5.3.1\windows\nglib\x64\Debug(OCC);$(LibraryPath)</LibraryPath>
+    <LibraryPath>$(SolutionDir)\opencascade-8.0.1\lib;$(SolutionDir)..\Netgen v5.3.1 port to OCCT 8.0.1\Netgen-master\netgen-5.3.1\windows\nglib\x64\Debug(OCC);$(LibraryPath)</LibraryPath>
     <TargetName>NetGenMesher</TargetName>
-    <OutDir>C:\Pc\Programiranje\NetgenMesher\NetgenMesher\Debug\</OutDir>
+    <OutDir>$(SolutionDir)..\NetgenMesher\Debug\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>$(SolutionDir)\opencascade-8.0.1\inc;$(SolutionDir)\nglib\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(SolutionDir)\opencascade-8.0.1\lib;C:\Pc\Programiranje\NetgenMesher\Netgen v5.3.1 port to OCCT 8.0.1 vs2026\Netgen-master\netgen-5.3.1\windows\nglib\x64\Release(OCC);$(LibraryPath)</LibraryPath>
+    <LibraryPath>$(SolutionDir)\opencascade-8.0.1\lib;$(SolutionDir)..\Netgen v5.3.1 port to OCCT 8.0.1\Netgen-master\netgen-5.3.1\windows\nglib\x64\Release(OCC);$(LibraryPath)</LibraryPath>
     <TargetName>NetGenMesher</TargetName>
-    <OutDir>C:\Pc\Programiranje\NetgenMesher\NetgenMesher\Release\</OutDir>
+    <OutDir>$(SolutionDir)..\NetgenMesher\Release\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
