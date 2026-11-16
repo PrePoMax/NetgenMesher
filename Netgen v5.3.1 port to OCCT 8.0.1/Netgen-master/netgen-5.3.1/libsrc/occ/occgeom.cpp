@@ -1932,14 +1932,14 @@ namespace netgen
 	// has to approximate. A positive offset moves a plane along its normal and grows the radius of the
 	// others; one that would leave no surface at all - a radius at or below zero, a torus that would
 	// close on itself - is refused, and the face it came from is left out of the tool.
+	// The surface is always rebuilt from its kind, also when the offset is zero. A face a split left holds
+	// its surface trimmed to the face - a periodic face divided in halves holds a half cylinder, and the
+	// whole band of the stem it lies on is its parameter range - and a tool made from that surface is only
+	// as large as the face. It then lies exactly on the face it was picked on and never continues past its
+	// boundary, so it divides nothing. The untrimmed surface of the same kind is the one the face lies on.
 	static bool OffsetSplitToolSurface(const Handle(Geom_Surface) & surface, double offset,
 	                                   Handle(Geom_Surface) & offsetSurface)
 	{
-		if (offset == 0)
-		{
-			offsetSurface = surface;
-			return true;
-		}
 		// The kind is read through the adaptor, as the geometry metadata reads it, so a surface a face
 		// holds inside a trimmed surface - as a split leaves it - is offset as the cylinder or plane the
 		// symbol showed, instead of being refused as a kind that cannot be offset
@@ -1949,7 +1949,7 @@ namespace netgen
 			case GeomAbs_Plane:
 			{
 				gp_Pln plane = adaptor.Plane();
-				plane.Translate(gp_Vec(plane.Axis().Direction()) * offset);
+				if (offset != 0) plane.Translate(gp_Vec(plane.Axis().Direction()) * offset);
 				offsetSurface = new Geom_Plane(plane);
 				return true;
 			}
@@ -1964,12 +1964,16 @@ namespace netgen
 			case GeomAbs_Cone:
 			{
 				gp_Cone cone = adaptor.Cone();
-				double cosine = cos(cone.SemiAngle());
-				if (fabs(cosine) <= Precision::Confusion()) return false;
-				// The offset is measured along the normal and the radius across the axis, and the two stand
-				// at the half angle of the cone to each other
-				double radius = cone.RefRadius() + offset / cosine;
-				if (radius < 0) return false;
+				double radius = cone.RefRadius();
+				if (offset != 0)
+				{
+					double cosine = cos(cone.SemiAngle());
+					if (fabs(cosine) <= Precision::Confusion()) return false;
+					// The offset is measured along the normal and the radius across the axis, and the two
+					// stand at the half angle of the cone to each other
+					radius += offset / cosine;
+					if (radius < 0) return false;
+				}
 				offsetSurface = new Geom_ConicalSurface(cone.Position(), cone.SemiAngle(), radius);
 				return true;
 			}
@@ -1985,12 +1989,17 @@ namespace netgen
 			{
 				gp_Torus torus = adaptor.Torus();
 				double minorRadius = torus.MinorRadius() + offset;
-				if (minorRadius <= Precision::Confusion() || minorRadius >= torus.MajorRadius()) return false;
+				if (offset != 0 && (minorRadius <= Precision::Confusion() || minorRadius >= torus.MajorRadius()))
+					return false;
 				offsetSurface = new Geom_ToroidalSurface(torus.Position(), torus.MajorRadius(), minorRadius);
 				return true;
 			}
 			default:
-				return false;
+				// A surface of no analytic kind has no continuation to rebuild, so without an offset it is
+				// the tool as the face holds it
+				if (offset != 0) return false;
+				offsetSurface = surface;
+				return true;
 		}
 	}
 	// Several faces may be extended at once, and they may sit on several shapes - a compound is split
